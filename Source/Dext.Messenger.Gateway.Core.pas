@@ -29,9 +29,17 @@ type
   public
     ClientMessageId: string;
     ConversationId: string;
-    TargetUserId: string;
+    DestinationKind: TMessengerDestinationKind;
+    DestinationId: string;
     Kind: TMessengerMessageKind;
     PayloadJson: string;
+
+    class function Direct(const AClientMessageId, AConversationId,
+      ATargetUserId: string; AKind: TMessengerMessageKind;
+      const APayloadJson: string): TMessengerClientSend; static;
+    class function Group(const AClientMessageId, AConversationId,
+      AGroupId: string; AKind: TMessengerMessageKind;
+      const APayloadJson: string): TMessengerClientSend; static;
   end;
 
   IMessengerGatewayRateLimiter = interface
@@ -39,9 +47,6 @@ type
     function TryAcquire(const AUserId, AOperation: string): Boolean;
   end;
 
-  { Per-user/operation fixed-window limiter with sharded locks. This is a
-    process-local first line of defense. A distributed limiter can replace it
-    behind IMessengerGatewayRateLimiter without changing gateway code. }
   TMessengerFixedWindowRateLimiter = class(TInterfacedObject, IMessengerGatewayRateLimiter)
   private type
     TRateBucket = record
@@ -52,6 +57,7 @@ type
     public
       Lock: TCriticalSection;
       Buckets: TDictionary<string, TRateBucket>;
+      LastSweepMs: Int64;
       constructor Create;
       destructor Destroy; override;
     end;
@@ -60,12 +66,14 @@ type
     FLimit: Integer;
     FWindowMs: Cardinal;
     FShardCount: Integer;
+    FIdleRetentionMs: Int64;
     class function MonotonicMs: Int64; static;
     function KeyOf(const AUserId, AOperation: string): string;
     function ShardFor(const AKey: string): TRateShard;
+    procedure SweepStaleBuckets(AShard: TRateShard; ANowMs: Int64);
   public
     constructor Create(ALimit: Integer; AWindowMs: Cardinal = 1000;
-      AShardCount: Integer = 64);
+      AShardCount: Integer = 64; AIdleRetentionWindows: Integer = 10);
     destructor Destroy; override;
     function TryAcquire(const AUserId, AOperation: string): Boolean;
   end;
@@ -86,8 +94,6 @@ uses
   System.Diagnostics,
   Dext.Messenger.Partitioning;
 
-{ TMessengerSession }
-
 class function TMessengerSession.AuthenticatedSession(const AUserId,
   ADeviceId, ASessionId, AGatewayId: string): TMessengerSession;
 begin
@@ -99,13 +105,38 @@ begin
   Result.Authenticated := True;
 end;
 
-{ TMessengerFixedWindowRateLimiter.TRateShard }
+class function TMessengerClientSend.Direct(const AClientMessageId,
+  AConversationId, ATargetUserId: string; AKind: TMessengerMessageKind;
+  const APayloadJson: string): TMessengerClientSend;
+begin
+  Result := Default(TMessengerClientSend);
+  Result.ClientMessageId := AClientMessageId;
+  Result.ConversationId := AConversationId;
+  Result.DestinationKind := mdkUser;
+  Result.DestinationId := ATargetUserId;
+  Result.Kind := AKind;
+  Result.PayloadJson := APayloadJson;
+end;
+
+class function TMessengerClientSend.Group(const AClientMessageId,
+  AConversationId, AGroupId: string; AKind: TMessengerMessageKind;
+  const APayloadJson: string): TMessengerClientSend;
+begin
+  Result := Default(TMessengerClientSend);
+  Result.ClientMessageId := AClientMessageId;
+  Result.ConversationId := AConversationId;
+  Result.DestinationKind := mdkGroup;
+  Result.DestinationId := AGroupId;
+  Result.Kind := AKind;
+  Result.PayloadJson := APayloadJson;
+end;
 
 constructor TMessengerFixedWindowRateLimiter.TRateShard.Create;
 begin
   inherited Create;
   Lock := TCriticalSection.Create;
   Buckets := TDictionary<string, TRateBucket>.Create;
+  LastSweepMs := 0;
 end;
 
 destructor TMessengerFixedWindowRateLimiter.TRateShard.Destroy;
@@ -115,15 +146,13 @@ begin
   inherited;
 end;
 
-{ TMessengerFixedWindowRateLimiter }
-
 class function TMessengerFixedWindowRateLimiter.MonotonicMs: Int64;
 begin
   Result := (TStopwatch.GetTimeStamp * Int64(1000)) div TStopwatch.Frequency;
 end;
 
 constructor TMessengerFixedWindowRateLimiter.Create(ALimit: Integer;
-  AWindowMs: Cardinal; AShardCount: Integer);
+  AWindowMs: Cardinal; AShardCount, AIdleRetentionWindows: Integer);
 var
   I: Integer;
 begin
@@ -131,10 +160,13 @@ begin
   if ALimit <= 0 then raise EArgumentOutOfRangeException.Create('ALimit');
   if AWindowMs = 0 then raise EArgumentOutOfRangeException.Create('AWindowMs');
   if AShardCount <= 0 then raise EArgumentOutOfRangeException.Create('AShardCount');
+  if AIdleRetentionWindows < 2 then
+    raise EArgumentOutOfRangeException.Create('AIdleRetentionWindows');
 
   FLimit := ALimit;
   FWindowMs := AWindowMs;
   FShardCount := AShardCount;
+  FIdleRetentionMs := Int64(AWindowMs) * AIdleRetentionWindows;
   FShards := TObjectList<TRateShard>.Create(True);
   for I := 0 to FShardCount - 1 do
     FShards.Add(TRateShard.Create);
@@ -163,6 +195,30 @@ begin
   Result := FShards[Index];
 end;
 
+procedure TMessengerFixedWindowRateLimiter.SweepStaleBuckets(
+  AShard: TRateShard; ANowMs: Int64);
+var
+  Pair: TPair<string, TRateBucket>;
+  Stale: TList<string>;
+  K: string;
+begin
+  if (AShard.LastSweepMs <> 0) and
+     (ANowMs - AShard.LastSweepMs < FIdleRetentionMs) then
+    Exit;
+
+  Stale := TList<string>.Create;
+  try
+    for Pair in AShard.Buckets do
+      if ANowMs - Pair.Value.WindowStartedMs >= FIdleRetentionMs then
+        Stale.Add(Pair.Key);
+    for K in Stale do
+      AShard.Buckets.Remove(K);
+    AShard.LastSweepMs := ANowMs;
+  finally
+    Stale.Free;
+  end;
+end;
+
 function TMessengerFixedWindowRateLimiter.TryAcquire(const AUserId,
   AOperation: string): Boolean;
 var
@@ -177,6 +233,7 @@ begin
 
   Shard.Lock.Enter;
   try
+    SweepStaleBuckets(Shard, NowMs);
     if not Shard.Buckets.TryGetValue(K, Bucket) then
     begin
       Bucket.WindowStartedMs := NowMs;
@@ -198,8 +255,6 @@ begin
     Shard.Lock.Leave;
   end;
 end;
-
-{ TMessengerGatewayCommandFactory }
 
 constructor TMessengerGatewayCommandFactory.Create(
   const ARateLimiter: IMessengerGatewayRateLimiter);
@@ -230,17 +285,22 @@ begin
 
   if AClientSend.ClientMessageId = '' then raise EMessengerGatewayError.Create('client_message_id is required');
   if AClientSend.ConversationId = '' then raise EMessengerGatewayError.Create('conversation_id is required');
-  if AClientSend.TargetUserId = '' then raise EMessengerGatewayError.Create('target_user_id is required');
+  if AClientSend.DestinationId = '' then raise EMessengerGatewayError.Create('destination_id is required');
 
-  { SenderUserId is ALWAYS derived from authenticated session state. The client
-    wire payload has no authority to choose or override sender identity. }
-  Result := TMessengerAcceptMessageCommand.Create(
-    AClientSend.ClientMessageId,
-    AClientSend.ConversationId,
-    ASession.UserId,
-    AClientSend.TargetUserId,
-    AClientSend.Kind,
-    AClientSend.PayloadJson);
+  case AClientSend.DestinationKind of
+    mdkUser:
+      Result := TMessengerAcceptMessageCommand.CreateDirect(
+        AClientSend.ClientMessageId, AClientSend.ConversationId,
+        ASession.UserId, AClientSend.DestinationId,
+        AClientSend.Kind, AClientSend.PayloadJson);
+    mdkGroup:
+      Result := TMessengerAcceptMessageCommand.CreateGroup(
+        AClientSend.ClientMessageId, AClientSend.ConversationId,
+        ASession.UserId, AClientSend.DestinationId,
+        AClientSend.Kind, AClientSend.PayloadJson);
+  else
+    raise EMessengerGatewayError.Create('Unsupported destination kind');
+  end;
 end;
 
 end.
