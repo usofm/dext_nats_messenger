@@ -10,7 +10,8 @@ uses
   Dext.Messenger.Core.Tests in 'Dext.Messenger.Core.Tests.pas',
   Dext.Messenger.Contracts.Tests in 'Dext.Messenger.Contracts.Tests.pas',
   Dext.Messenger.Acceptance.Tests in 'Dext.Messenger.Acceptance.Tests.pas',
-  Dext.Messenger.Runtime.Tests in 'Dext.Messenger.Runtime.Tests.pas';
+  Dext.Messenger.Runtime.Tests in 'Dext.Messenger.Runtime.Tests.pas',
+  Dext.Messenger.Conversation.Tests in 'Dext.Messenger.Conversation.Tests.pas';
 
 var
   Summary: TTestSummary;
