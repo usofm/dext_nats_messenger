@@ -37,6 +37,14 @@ type
       ADestinationType, ADestinationId, AKind, APayloadJson: string):
       TMessengerHttpSendResult;
 
+    function CreateDirectConversationJson(const AOtherUserId: string): string;
+    function CreateGroupConversationJson(const ATitle: string): string;
+    function ListConversationsJson(AOffset: Integer = 0;
+      ALimit: Integer = 50): string;
+    procedure AddGroupMember(const AConversationId, AUserId,
+      ARole: string);
+    procedure RemoveGroupMember(const AConversationId, AUserId: string);
+
     function SyncConversationJson(const AConversationId: string;
       AAfterSequence: Int64; ALimit: Integer = 100): string;
 
@@ -60,9 +68,11 @@ end;
 constructor TMessengerHttpClient.Create(const ABaseUrl: string);
 begin
   inherited Create;
-  if Trim(ABaseUrl) = '' then
+  FBaseUrl := Trim(ABaseUrl);
+  if FBaseUrl = '' then
     raise EArgumentException.Create('base_url is required');
-  FBaseUrl := ABaseUrl.TrimRight(['/']);
+  while (Length(FBaseUrl) > 0) and (FBaseUrl[Length(FBaseUrl)] = '/') do
+    Delete(FBaseUrl, Length(FBaseUrl), 1);
   FHttp := THTTPClient.Create;
   FHttp.ConnectionTimeout := 10000;
   FHttp.ResponseTimeout := 30000;
@@ -142,9 +152,7 @@ end;
 function TMessengerHttpClient.SendMessage(const AClientMessageId,
   AConversationId, ADestinationType, ADestinationId, AKind,
   APayloadJson: string): TMessengerHttpSendResult;
-var
-  O: TJSONObject;
-  Json, Response: string;
+var O: TJSONObject; Json, Response: string;
 begin
   O := TJSONObject.Create;
   try
@@ -155,17 +163,73 @@ begin
     O.AddPair('Kind', JsonStringValue(AKind));
     O.AddPair('PayloadJson', JsonStringValue(APayloadJson));
     Json := O.ToJSON;
-  finally
-    O.Free;
-  end;
+  finally O.Free; end;
   Response := ExecuteJson('POST', '/api/messenger/messages', Json);
   Result := ParseSendResult(Response);
 end;
 
+function TMessengerHttpClient.CreateDirectConversationJson(
+  const AOtherUserId: string): string;
+var O: TJSONObject;
+begin
+  O := TJSONObject.Create;
+  try
+    O.AddPair('OtherUserId', AOtherUserId);
+    Result := ExecuteJson('POST', '/api/messenger/conversations/direct', O.ToJSON);
+  finally O.Free; end;
+end;
+
+function TMessengerHttpClient.CreateGroupConversationJson(
+  const ATitle: string): string;
+var O: TJSONObject;
+begin
+  O := TJSONObject.Create;
+  try
+    O.AddPair('Title', ATitle);
+    Result := ExecuteJson('POST', '/api/messenger/conversations/group', O.ToJSON);
+  finally O.Free; end;
+end;
+
+function TMessengerHttpClient.ListConversationsJson(AOffset,
+  ALimit: Integer): string;
+var O: TJSONObject;
+begin
+  O := TJSONObject.Create;
+  try
+    O.AddPair('Offset', TJSONNumber.Create(AOffset));
+    O.AddPair('Limit', TJSONNumber.Create(ALimit));
+    Result := ExecuteJson('POST', '/api/messenger/conversations/list', O.ToJSON);
+  finally O.Free; end;
+end;
+
+procedure TMessengerHttpClient.AddGroupMember(const AConversationId,
+  AUserId, ARole: string);
+var O: TJSONObject;
+begin
+  O := TJSONObject.Create;
+  try
+    O.AddPair('ConversationId', AConversationId);
+    O.AddPair('UserId', AUserId);
+    O.AddPair('Role', ARole);
+    ExecuteJson('POST', '/api/messenger/groups/members', O.ToJSON);
+  finally O.Free; end;
+end;
+
+procedure TMessengerHttpClient.RemoveGroupMember(const AConversationId,
+  AUserId: string);
+var O: TJSONObject;
+begin
+  O := TJSONObject.Create;
+  try
+    O.AddPair('ConversationId', AConversationId);
+    O.AddPair('UserId', AUserId);
+    ExecuteJson('POST', '/api/messenger/groups/members/remove', O.ToJSON);
+  finally O.Free; end;
+end;
+
 function TMessengerHttpClient.SyncConversationJson(const AConversationId: string;
   AAfterSequence: Int64; ALimit: Integer): string;
-var
-  O: TJSONObject;
+var O: TJSONObject;
 begin
   O := TJSONObject.Create;
   try
@@ -173,45 +237,36 @@ begin
     O.AddPair('AfterSequence', TJSONNumber.Create(AAfterSequence));
     O.AddPair('Limit', TJSONNumber.Create(ALimit));
     Result := ExecuteJson('POST', '/api/messenger/sync', O.ToJSON);
-  finally
-    O.Free;
-  end;
+  finally O.Free; end;
 end;
 
 procedure TMessengerHttpClient.MarkDelivered(const AConversationId: string;
   ASequence: Int64);
-var
-  O: TJSONObject;
+var O: TJSONObject;
 begin
   O := TJSONObject.Create;
   try
     O.AddPair('ConversationId', AConversationId);
     O.AddPair('Sequence', TJSONNumber.Create(ASequence));
     ExecuteJson('POST', '/api/messenger/cursors/delivered', O.ToJSON);
-  finally
-    O.Free;
-  end;
+  finally O.Free; end;
 end;
 
 procedure TMessengerHttpClient.MarkRead(const AConversationId: string;
   ASequence: Int64);
-var
-  O: TJSONObject;
+var O: TJSONObject;
 begin
   O := TJSONObject.Create;
   try
     O.AddPair('ConversationId', AConversationId);
     O.AddPair('Sequence', TJSONNumber.Create(ASequence));
     ExecuteJson('POST', '/api/messenger/cursors/read', O.ToJSON);
-  finally
-    O.Free;
-  end;
+  finally O.Free; end;
 end;
 
 function TMessengerHttpClient.CreateUploadJson(const AFileName,
   AContentType: string; ASizeBytes: Int64): string;
-var
-  O: TJSONObject;
+var O: TJSONObject;
 begin
   O := TJSONObject.Create;
   try
@@ -219,15 +274,12 @@ begin
     O.AddPair('ContentType', AContentType);
     O.AddPair('SizeBytes', TJSONNumber.Create(ASizeBytes));
     Result := ExecuteJson('POST', '/api/messenger/media/uploads', O.ToJSON);
-  finally
-    O.Free;
-  end;
+  finally O.Free; end;
 end;
 
 function TMessengerHttpClient.CommitUploadJson(const AMediaId, ASha256Hex: string;
   AActualSizeBytes: Int64): string;
-var
-  O: TJSONObject;
+var O: TJSONObject;
 begin
   O := TJSONObject.Create;
   try
@@ -235,22 +287,17 @@ begin
     O.AddPair('Sha256Hex', ASha256Hex);
     O.AddPair('ActualSizeBytes', TJSONNumber.Create(AActualSizeBytes));
     Result := ExecuteJson('POST', '/api/messenger/media/commit', O.ToJSON);
-  finally
-    O.Free;
-  end;
+  finally O.Free; end;
 end;
 
 function TMessengerHttpClient.ResolveMediaJson(const AMediaId: string): string;
-var
-  O: TJSONObject;
+var O: TJSONObject;
 begin
   O := TJSONObject.Create;
   try
     O.AddPair('MediaId', AMediaId);
     Result := ExecuteJson('POST', '/api/messenger/media/resolve', O.ToJSON);
-  finally
-    O.Free;
-  end;
+  finally O.Free; end;
 end;
 
 end.
