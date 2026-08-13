@@ -25,6 +25,8 @@ type
 
     class function AcceptedMessagePartition(APartition: Integer): string; static;
     class function AcceptedMessageWildcard: string; static;
+    class function DeliveryDeadLetter(APartition: Integer): string; static;
+    class function DeliveryDeadLetterWildcard: string; static;
 
     class function MessageCreatedEvent: string; static;
     class function GroupMemberAddedEvent: string; static;
@@ -110,6 +112,18 @@ end;
 class function TMessengerSubjects.AcceptedMessageWildcard: string;
 begin
   Result := 'durable.v1.message.accepted.*';
+end;
+
+class function TMessengerSubjects.DeliveryDeadLetter(APartition: Integer): string;
+begin
+  if APartition < 0 then
+    raise EMessengerSubjectError.Create('partition must not be negative');
+  Result := 'dlq.v1.delivery.' + IntToStr(APartition);
+end;
+
+class function TMessengerSubjects.DeliveryDeadLetterWildcard: string;
+begin
+  Result := 'dlq.v1.delivery.*';
 end;
 
 class function TMessengerSubjects.MessageCreatedEvent: string;
