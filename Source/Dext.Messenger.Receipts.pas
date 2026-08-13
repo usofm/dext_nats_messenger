@@ -4,6 +4,7 @@ interface
 
 uses
   System.SysUtils,
+  Dext.Messenger.Acceptance,
   Dext.Messenger.Models,
   Dext.Messenger.Gateway.Core,
   Dext.Messenger.Realtime;
@@ -34,20 +35,17 @@ type
     FStore: IMessengerReceiptStore;
     FGuard: IMessengerReceiptMessageGuard;
     FRealtime: TMessengerRealtimeService;
-    FClock: Dext.Messenger.Acceptance.IMessengerClock;
+    FClock: IMessengerClock;
   public
     constructor Create(const AStore: IMessengerReceiptStore;
       const AGuard: IMessengerReceiptMessageGuard;
       ARealtime: TMessengerRealtimeService;
-      const AClock: Dext.Messenger.Acceptance.IMessengerClock);
+      const AClock: IMessengerClock);
     procedure RecordFromSession(const ASession: TMessengerSession;
       const ACommand: TMessengerReceiptCommand);
   end;
 
 implementation
-
-uses
-  Dext.Messenger.Acceptance;
 
 constructor TMessengerReceiptService.Create(const AStore: IMessengerReceiptStore;
   const AGuard: IMessengerReceiptMessageGuard;
