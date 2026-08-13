@@ -1,0 +1,43 @@
+name: quality
+
+on:
+  push:
+    branches: [main, 'agent/**']
+  pull_request:
+
+jobs:
+  structural-and-loadgen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: Benchmarks/loadgen/go.mod
+          cache-dependency-path: Benchmarks/loadgen/go.sum
+
+      - name: Download load generator dependencies
+        working-directory: Benchmarks/loadgen
+        run: go mod download
+
+      - name: Build and vet load generator
+        working-directory: Benchmarks/loadgen
+        run: |
+          go test ./...
+          go vet ./...
+          go build ./...
+
+      - name: Run structural quality gate
+        shell: pwsh
+        run: ./scripts/quality-gate.ps1 -SkipDelphi -SkipGo
+
+  delphi-contract:
+    if: ${{ vars.DELPHI_SELF_HOSTED == 'true' }}
+    runs-on: [self-hosted, windows, delphi]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and run Delphi tests
+        shell: pwsh
+        run: |
+          ./scripts/quality-gate.ps1 -SkipGo
+          ./Tests/Dext.Messenger.Tests.exe
