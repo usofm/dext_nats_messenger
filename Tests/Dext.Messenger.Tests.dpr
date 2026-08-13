@@ -1,12 +1,12 @@
 program Dext.Messenger.Tests;
 
 {$APPTYPE CONSOLE}
-{$RTTI EXPLICIT METHODS([vcPublic, vcPublished, vcProtected])}
 
 uses
   Dext.MM,
   System.SysUtils,
-  Dext.Testing.Runner,
+  Dext.Testing,
+  Dext.Testing.Fluent,
   Dext.Messenger.Core.Tests in 'Dext.Messenger.Core.Tests.pas',
   Dext.Messenger.Contracts.Tests in 'Dext.Messenger.Contracts.Tests.pas',
   Dext.Messenger.Acceptance.Tests in 'Dext.Messenger.Acceptance.Tests.pas',
@@ -17,11 +17,22 @@ var
   Summary: TTestSummary;
 begin
   try
-    TTestRunner.SetVerbosity(ovVerbose);
-    TTestRunner.Discover;
-    TTestRunner.RunAll;
+    RunTests(ConfigureTests
+      .Verbose
+      .RegisterFixtures([
+        TMessengerCoreTests,
+        TMessengerContractTests,
+        TMessengerAcceptanceTests,
+        TMessengerRuntimeTests,
+        TMessengerConversationTests
+      ]));
     Summary := TTestRunner.Summary;
-    if (Summary.Failed > 0) or (Summary.Errors > 0) then
+    if Summary.TotalTests = 0 then
+    begin
+      Writeln('ERROR: no tests were executed');
+      ExitCode := 3;
+    end
+    else if (Summary.Failed > 0) or (Summary.Errors > 0) then
       ExitCode := 1
     else
       ExitCode := 0;

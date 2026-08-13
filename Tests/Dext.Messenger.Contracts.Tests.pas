@@ -4,6 +4,7 @@ interface
 
 uses
   System.SysUtils,
+  System.Classes,
   Dext.Testing,
   Dext.Testing.Attributes,
   Dext.Testing.Fluent,

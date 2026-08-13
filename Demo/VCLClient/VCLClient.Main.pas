@@ -7,6 +7,7 @@ uses
   System.Classes,
   System.DateUtils,
   System.JSON,
+  System.Generics.Collections,
   Vcl.Forms,
   Vcl.Controls,
   Vcl.StdCtrls,
@@ -340,7 +341,12 @@ begin
 
   if Assigned(FNats) then
   begin
-    try FNats.Disconnect; except end;
+    try
+      FNats.Disconnect;
+    except
+      on E: Exception do
+        AppendChat('[disconnect error] ' + E.Message);
+    end;
     FreeAndNil(FNats);
   end;
 

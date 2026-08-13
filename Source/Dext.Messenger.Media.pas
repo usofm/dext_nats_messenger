@@ -3,7 +3,8 @@ unit Dext.Messenger.Media;
 interface
 
 uses
-  System.SysUtils;
+  System.SysUtils,
+  System.Classes;
 
 type
   TMessengerMediaState = (mmsPendingUpload, mmsReady, mmsQuarantined, mmsDeleted);

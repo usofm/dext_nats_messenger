@@ -45,7 +45,6 @@ implementation
 class function TMessengerOutboundQueueLimits.Default:
   TMessengerOutboundQueueLimits;
 begin
-  Result := Default(TMessengerOutboundQueueLimits);
   Result.MaxMessages := 1024;
   Result.MaxBytes := Int64(8) * 1024 * 1024;
   Result.DisconnectAtPercent := 90;
