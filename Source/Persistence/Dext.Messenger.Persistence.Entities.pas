@@ -13,6 +13,7 @@ type
   private
     FId: StringType;
     FKind: IntType;
+    FGroupId: StringType;
     FTitle: StringType;
     FCreatedBy: StringType;
     FCreatedAt: TDateTime;
@@ -23,6 +24,8 @@ type
     property Id: StringType read FId write FId;
     [Required]
     property Kind: IntType read FKind write FKind;
+    [MaxLength(128)]
+    property GroupId: StringType read FGroupId write FGroupId;
     [MaxLength(200)]
     property Title: StringType read FTitle write FTitle;
     [Required, MaxLength(128)]
