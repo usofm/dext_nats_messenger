@@ -1,10 +1,28 @@
 # VCL Messenger Client
 
-This is the engineering VCL client for `dext_nats_messenger`.
+The VCL demo now has two explicit operating modes.
 
-## Current mode: Developer / Direct NATS
+## Production Gateway mode
 
-The first bootstrap version connects directly to a local/dev NATS server and uses:
+This is the default mode. The desktop client does **not** receive privileged NATS credentials.
+
+```text
+VCL UI
+  -> TMessengerHttpClient
+      -> authenticated Dext Gateway HTTPS APIs
+          -> acceptance / sync / cursor services
+              -> PostgreSQL + NATS/JetStream backend
+```
+
+The form accepts a Gateway base URL, JWT and conversation ID. Message sends go through `/api/messenger/messages`; reconnect/history recovery uses `/api/messenger/sync`; successfully processed history advances the delivered cursor.
+
+The shared Delphi HTTP client also exposes direct/group conversation creation/listing, group member management, read/delivered cursor operations and media upload/commit/resolve APIs.
+
+The current VCL form uses a one-second sync timer as a simple production-safe delivery/recovery path. A future UI optimization may attach a Dext Hub-compatible Delphi WebSocket client for immediate push while retaining cursor sync as the correctness/recovery mechanism. The server-side Hub is already implemented at `/hubs/messenger`.
+
+## Developer direct-NATS mode
+
+This optional diagnostic mode connects directly to a development NATS server:
 
 ```text
 VCL UI
@@ -14,45 +32,25 @@ VCL UI
               -> TDextNatsClient
 ```
 
-This mode exists to validate the messenger core, subject contracts, codec, delivery callbacks and NATS behavior quickly.
+It is useful for codec/subject/NATS diagnostics but is **not** the intended production end-user security topology.
 
-It is **not** the intended production security topology for end users.
+## Production quick test
 
-## Planned production mode: Dext Gateway
+1. Start the Gateway/backend stack and create/authenticate two users.
+2. Ensure JWTs contain the required user, `device_id` and `session_id` claims.
+3. Create or identify a direct conversation through the Gateway API.
+4. Run two VCL instances in Production Gateway mode.
+5. Enter each user's Gateway URL, JWT and the shared conversation ID.
+6. Send a message to the other user.
+7. The other instance obtains the canonical message through sync and advances its delivered cursor.
 
-The production client mode will be:
-
-```text
-VCL UI
-  -> Messenger Client API
-      -> Dext WebSocket / Hub Gateway
-          -> authenticated application service
-              -> NATS Core / JetStream
-```
-
-The form must not embed NATS-specific business logic so that the transport can be replaced without rewriting the chat UI.
-
-## Quick test
+## Developer quick test
 
 1. Start a local NATS server on `127.0.0.1:4222`.
-2. Run two VCL client instances.
-3. Connect the first as `user-a`.
-4. Connect the second as `user-b`.
-5. Set the target user to the other user and send a text message.
+2. Uncheck Production Gateway mode.
+3. Run two VCL instances as `user-a` and `user-b`.
+4. Send direct test messages between the users.
 
-The client subscribes to `msg.v1.user.<user_id>` through `TMessengerMessageService`.
+## UI boundary
 
-## Next UI capabilities
-
-- conversation list
-- personal chat tabs
-- group chat
-- online/presence indicator
-- typing indicator
-- delivered/read markers
-- connection/reconnect status
-- message timestamps
-- history load through Gateway HTTP API
-- attachment metadata/upload flow
-- developer diagnostics panel
-- load/burst test helpers
+Business rules remain outside the form. The VCL project consumes the shared client/domain services so the same backend contracts can be reused by FGX Native, UniGUI or other Delphi clients.
