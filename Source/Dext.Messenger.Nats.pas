@@ -13,6 +13,7 @@ type
   TDextMessengerNatsSubscription = class(TInterfacedObject, IMessengerSubscription)
   private
     FOwner: TDextMessengerNatsTransport;
+    FOwnerRef: IMessengerTransport;
     FSid: Integer;
     FActive: Boolean;
   public
@@ -51,6 +52,7 @@ constructor TDextMessengerNatsSubscription.Create(
 begin
   inherited Create;
   FOwner := AOwner;
+  FOwnerRef := AOwner;
   FSid := ASid;
   FActive := True;
 end;
@@ -58,6 +60,8 @@ end;
 destructor TDextMessengerNatsSubscription.Destroy;
 begin
   Unsubscribe;
+  FOwner := nil;
+  FOwnerRef := nil;
   inherited;
 end;
 
@@ -105,7 +109,7 @@ procedure TDextMessengerNatsTransport.Publish(
 );
 begin
   if not Assigned(FNats) then
-    raise EInvalidOperation.Create('NATS transport is not initialized');
+    raise Exception.Create('NATS transport is not initialized');
 
   FNats.Publish(ASubject, APayload);
 end;
@@ -119,7 +123,7 @@ var
   Sid: Integer;
 begin
   if not Assigned(FNats) then
-    raise EInvalidOperation.Create('NATS transport is not initialized');
+    raise Exception.Create('NATS transport is not initialized');
 
   if not Assigned(AHandler) then
     raise EArgumentNilException.Create('AHandler');
