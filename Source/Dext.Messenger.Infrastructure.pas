@@ -4,6 +4,7 @@ interface
 
 uses
   System.SysUtils,
+  System.Classes,
   System.SyncObjs,
   System.Generics.Collections,
   Dext.Messenger.Acceptance,

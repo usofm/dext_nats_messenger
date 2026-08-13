@@ -4,6 +4,7 @@ interface
 
 uses
   System.SysUtils,
+  System.Classes,
   Dext.Entity.Drivers.Interfaces,
   Dext.Messenger.Sync,
   Dext.Messenger.Conversations,

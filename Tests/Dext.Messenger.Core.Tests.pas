@@ -30,6 +30,9 @@ type
 
     [Test, Category('Unit'), Category('Protocol')]
     procedure JsonCodec_ShouldRoundTripTextMessage;
+
+    [Test, Category('Unit'), Category('Protocol')]
+    procedure JsonCodec_ShouldRejectOutOfRangeVersion;
   end;
 
 implementation
@@ -102,6 +105,22 @@ begin
   Should(Ord(Output.Kind)).Be(Ord(mmkText));
   Should(Output.CreatedAtUnixMs).Be(Input.CreatedAtUnixMs);
   Should(Output.PayloadJson).Be('{"text":"hello","n":1}');
+end;
+
+procedure TMessengerCoreTests.JsonCodec_ShouldRejectOutOfRangeVersion;
+var
+  Raised: Boolean;
+begin
+  Raised := False;
+  try
+    TMessengerJsonCodec.DecodeMessage(TEncoding.UTF8.GetBytes(
+      '{"version":2147483648}'
+    ));
+  except
+    on EMessengerCodecError do
+      Raised := True;
+  end;
+  Should(Raised).BeTrue;
 end;
 
 end.

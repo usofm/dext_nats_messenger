@@ -4,7 +4,9 @@ uses
   Vcl.Forms,
   VCLClient.Main in 'VCLClient.Main.pas' {MainForm};
 
-{$R *.res}
+{$IF FileExists('VCLMessengerClient.res')}
+{$R 'VCLMessengerClient.res'}
+{$IFEND}
 
 begin
   Application.Initialize;

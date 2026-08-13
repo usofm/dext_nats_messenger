@@ -222,6 +222,7 @@ var
   Reader: TUtf8JsonReader;
   PropertyName: string;
   KindText: string;
+  VersionValue: Int64;
 begin
   Result := Default(TMessengerMessage);
   if Length(AData) = 0 then
@@ -244,7 +245,12 @@ begin
       raise EMessengerCodecError.Create('Unexpected end of message envelope');
 
     if PropertyName = 'version' then
-      Result.Version := Reader.GetInt64
+    begin
+      VersionValue := Reader.GetInt64;
+      if (VersionValue < Low(Integer)) or (VersionValue > High(Integer)) then
+        raise EMessengerCodecError.Create('Message version is outside the supported integer range');
+      Result.Version := Integer(VersionValue);
+    end
     else if PropertyName = 'message_id' then
       Result.MessageId := Reader.GetString
     else if PropertyName = 'client_message_id' then
