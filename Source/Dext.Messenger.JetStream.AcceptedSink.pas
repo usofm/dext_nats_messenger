@@ -62,13 +62,10 @@ begin
   if not AAccepted.IsCanonical then
     raise EArgumentException.Create('Only canonical accepted messages may be published');
 
-  Subject := TMessengerSubjects.AcceptedMessage(AAccepted.Partition);
+  Subject := TMessengerSubjects.AcceptedMessagePartition(AAccepted.Partition);
   Payload := TMessengerJsonCodec.EncodeMessage(AAccepted.Message);
 
   Options := TNatsJetStreamPublishOptions.CreateDefault;
-  { Stable across outbox retries. Database uniqueness is the permanent
-    idempotency authority; JetStream dedup prevents duplicate broker entries
-    during the configured transport window. }
   Options.MsgId := AAccepted.Message.SenderUserId + ':' +
     AAccepted.Message.ClientMessageId;
   Options.ExpectedStream := TMessengerJetStreamTopology.AcceptedMessagesStream;
