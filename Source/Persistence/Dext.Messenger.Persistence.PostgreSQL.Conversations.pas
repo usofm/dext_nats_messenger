@@ -18,8 +18,10 @@ type
       out ALow, AHigh: string); static;
     function TryReadDirectPair(const ALow, AHigh: string;
       out AInfo: TMessengerConversationInfo): Boolean;
-    procedure InsertConversation(const AConversationId: string;
-      AKind: Integer; const AGroupId, ATitle, ACreatedBy: string);
+    procedure InsertDirectConversation(const AConversationId,
+      ACreatedBy: string);
+    procedure InsertGroupConversation(const AConversationId, AGroupId,
+      ATitle, ACreatedBy: string);
     procedure InsertMember(const AConversationId, AUserId: string;
       ARoleDb: Integer);
   public
@@ -40,9 +42,13 @@ const
     'select conversation_id from messenger_direct_pairs ' +
     'where user_low_id=:user_low and user_high_id=:user_high';
 
-  SQL_INSERT_CONVERSATION =
+  SQL_INSERT_DIRECT_CONVERSATION =
     'insert into messenger_conversations(id,kind,group_id,title,created_by,created_at,last_sequence) ' +
-    'values(:id,:kind,:group_id,:title,:created_by,now(),0)';
+    'values(:id,1,null,null,:created_by,now(),0)';
+
+  SQL_INSERT_GROUP_CONVERSATION =
+    'insert into messenger_conversations(id,kind,group_id,title,created_by,created_at,last_sequence) ' +
+    'values(:id,2,:group_id,:title,:created_by,now(),0)';
 
   SQL_INSERT_DIRECT_PAIR =
     'insert into messenger_direct_pairs(user_low_id,user_high_id,conversation_id) ' +
@@ -99,21 +105,25 @@ begin
   end;
 end;
 
-procedure TMessengerPostgreSQLConversationLifecycleStore.InsertConversation(
-  const AConversationId: string; AKind: Integer;
-  const AGroupId, ATitle, ACreatedBy: string);
+procedure TMessengerPostgreSQLConversationLifecycleStore.InsertDirectConversation(
+  const AConversationId, ACreatedBy: string);
 var
   Cmd: IDbCommand;
-  GroupValue: TValue;
 begin
-  Cmd := FContext.Connection.CreateCommand(SQL_INSERT_CONVERSATION);
+  Cmd := FContext.Connection.CreateCommand(SQL_INSERT_DIRECT_CONVERSATION);
   Cmd.AddParam('id', TValue.From<string>(AConversationId));
-  Cmd.AddParam('kind', TValue.From<Integer>(AKind));
-  if AGroupId = '' then
-    GroupValue := TValue.Empty
-  else
-    GroupValue := TValue.From<string>(AGroupId);
-  Cmd.AddParam('group_id', GroupValue);
+  Cmd.AddParam('created_by', TValue.From<string>(ACreatedBy));
+  Cmd.ExecuteNonQuery;
+end;
+
+procedure TMessengerPostgreSQLConversationLifecycleStore.InsertGroupConversation(
+  const AConversationId, AGroupId, ATitle, ACreatedBy: string);
+var
+  Cmd: IDbCommand;
+begin
+  Cmd := FContext.Connection.CreateCommand(SQL_INSERT_GROUP_CONVERSATION);
+  Cmd.AddParam('id', TValue.From<string>(AConversationId));
+  Cmd.AddParam('group_id', TValue.From<string>(AGroupId));
   Cmd.AddParam('title', TValue.From<string>(ATitle));
   Cmd.AddParam('created_by', TValue.From<string>(ACreatedBy));
   Cmd.ExecuteNonQuery;
@@ -152,7 +162,7 @@ begin
 
   FContext.BeginTransaction;
   try
-    InsertConversation(AConversationId, 1, '', '', AUserA);
+    InsertDirectConversation(AConversationId, AUserA);
 
     Cmd := FContext.Connection.CreateCommand(SQL_INSERT_DIRECT_PAIR);
     Cmd.AddParam('user_low', TValue.From<string>(LowUser));
@@ -196,7 +206,7 @@ begin
 
   FContext.BeginTransaction;
   try
-    InsertConversation(AConversationId, 2, AGroupId, ATitle, AOwnerUserId);
+    InsertGroupConversation(AConversationId, AGroupId, ATitle, AOwnerUserId);
     { DB role values are 1=member, 2=moderator, 3=admin, 4=owner. }
     InsertMember(AConversationId, AOwnerUserId, 4);
     FContext.Commit;
