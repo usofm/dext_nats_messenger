@@ -16,9 +16,9 @@ jobs:
           go-version-file: Benchmarks/loadgen/go.mod
           cache: false
 
-      - name: Download load generator dependencies
+      - name: Resolve load generator module graph
         working-directory: Benchmarks/loadgen
-        run: go mod download
+        run: go mod tidy
 
       - name: Build and vet load generator
         working-directory: Benchmarks/loadgen
