@@ -17,21 +17,15 @@ type
   public
     Status: TMessengerAcceptanceStatus;
     Accepted: TMessengerAcceptedMessage;
-    class function NewAccepted(const AAccepted: TMessengerAcceptedMessage): TMessengerAcceptanceResult; static;
-    class function Duplicate(const AAccepted: TMessengerAcceptedMessage): TMessengerAcceptanceResult; static;
   end;
 
+  { Authorization is evaluated against the typed destination. Concrete
+    implementations normally query/cache conversation membership and roles. }
   IMessengerConversationAuthorizer = interface
     ['{C89EF39F-9D6B-4BA0-B5CB-1EB61ACF5F77}']
-    function CanSend(const ASenderUserId, AConversationId, ATargetUserId: string): Boolean;
-  end;
-
-  IMessengerIdempotencyStore = interface
-    ['{96FCE5C9-E28B-4449-B188-4334F62613B2}']
-    function TryGetAccepted(const ASenderUserId, AClientMessageId: string;
-      out AAccepted: TMessengerAcceptedMessage): Boolean;
-    procedure StoreAccepted(const ASenderUserId, AClientMessageId: string;
-      const AAccepted: TMessengerAcceptedMessage);
+    function CanSend(const ASenderUserId, AConversationId: string;
+      ADestinationKind: TMessengerDestinationKind;
+      const ADestinationId: string): Boolean;
   end;
 
   IMessengerMessageIdGenerator = interface
@@ -44,27 +38,38 @@ type
     function UnixTimeMilliseconds: Int64;
   end;
 
-  IMessengerAcceptedMessageSink = interface
-    ['{3DDF2DB4-2866-4F5F-A56E-E6C5E3478233}']
-    procedure PublishAccepted(const AAccepted: TMessengerAcceptedMessage);
+  { Result of ONE atomic acceptance transaction. The store MUST either:
+      - insert the canonical message, allocate its conversation sequence and
+        insert the outbox event in the same transaction; or
+      - return the already-existing canonical message for the same
+        (sender_user_id, client_message_id).
+    It must never return a proposal that was not committed. }
+  TMessengerAcceptanceStoreResult = record
+  public
+    Accepted: TMessengerAcceptedMessage;
+    WasDuplicate: Boolean;
+  end;
+
+  IMessengerAcceptanceStore = interface
+    ['{9527F148-773B-4DBE-B935-F0A86F1D511B}']
+    function AcceptOrGet(const ACommand: TMessengerAcceptMessageCommand;
+      const AProposal: TMessengerAcceptedMessage): TMessengerAcceptanceStoreResult;
   end;
 
   TMessengerAcceptanceService = class
   private
     FAuthorizer: IMessengerConversationAuthorizer;
-    FIdempotency: IMessengerIdempotencyStore;
+    FStore: IMessengerAcceptanceStore;
     FIdGenerator: IMessengerMessageIdGenerator;
     FClock: IMessengerClock;
-    FSink: IMessengerAcceptedMessageSink;
     FPartitionCount: Integer;
     class procedure ValidateCommand(const ACommand: TMessengerAcceptMessageCommand); static;
   public
     constructor Create(
       const AAuthorizer: IMessengerConversationAuthorizer;
-      const AIdempotency: IMessengerIdempotencyStore;
+      const AStore: IMessengerAcceptanceStore;
       const AIdGenerator: IMessengerMessageIdGenerator;
       const AClock: IMessengerClock;
-      const ASink: IMessengerAcceptedMessageSink;
       APartitionCount: Integer = 64);
 
     function Accept(const ACommand: TMessengerAcceptMessageCommand): TMessengerAcceptanceResult;
@@ -75,42 +80,23 @@ implementation
 uses
   Dext.Messenger.Partitioning;
 
-class function TMessengerAcceptanceResult.NewAccepted(
-  const AAccepted: TMessengerAcceptedMessage): TMessengerAcceptanceResult;
-begin
-  Result := Default(TMessengerAcceptanceResult);
-  Result.Status := masAccepted;
-  Result.Accepted := AAccepted;
-end;
-
-class function TMessengerAcceptanceResult.Duplicate(
-  const AAccepted: TMessengerAcceptedMessage): TMessengerAcceptanceResult;
-begin
-  Result := Default(TMessengerAcceptanceResult);
-  Result.Status := masDuplicate;
-  Result.Accepted := AAccepted;
-end;
-
 constructor TMessengerAcceptanceService.Create(
   const AAuthorizer: IMessengerConversationAuthorizer;
-  const AIdempotency: IMessengerIdempotencyStore;
+  const AStore: IMessengerAcceptanceStore;
   const AIdGenerator: IMessengerMessageIdGenerator;
   const AClock: IMessengerClock;
-  const ASink: IMessengerAcceptedMessageSink;
   APartitionCount: Integer);
 begin
   inherited Create;
   if AAuthorizer = nil then raise EArgumentNilException.Create('AAuthorizer');
-  if AIdempotency = nil then raise EArgumentNilException.Create('AIdempotency');
+  if AStore = nil then raise EArgumentNilException.Create('AStore');
   if AIdGenerator = nil then raise EArgumentNilException.Create('AIdGenerator');
   if AClock = nil then raise EArgumentNilException.Create('AClock');
-  if ASink = nil then raise EArgumentNilException.Create('ASink');
   if APartitionCount <= 0 then raise EArgumentOutOfRangeException.Create('APartitionCount');
   FAuthorizer := AAuthorizer;
-  FIdempotency := AIdempotency;
+  FStore := AStore;
   FIdGenerator := AIdGenerator;
   FClock := AClock;
-  FSink := ASink;
   FPartitionCount := APartitionCount;
 end;
 
@@ -123,8 +109,8 @@ begin
     raise EMessengerAcceptanceError.Create('conversation_id must not be empty');
   if ACommand.SenderUserId = '' then
     raise EMessengerAcceptanceError.Create('sender_user_id must not be empty');
-  if ACommand.TargetUserId = '' then
-    raise EMessengerAcceptanceError.Create('target_user_id must not be empty');
+  if ACommand.DestinationId = '' then
+    raise EMessengerAcceptanceError.Create('destination_id must not be empty');
   if (ACommand.Kind <> mmkSystem) and (ACommand.PayloadJson = '') then
     raise EMessengerAcceptanceError.Create('payload_json must not be empty');
 end;
@@ -132,25 +118,18 @@ end;
 function TMessengerAcceptanceService.Accept(
   const ACommand: TMessengerAcceptMessageCommand): TMessengerAcceptanceResult;
 var
-  Existing: TMessengerAcceptedMessage;
   Message: TMessengerMessage;
-  Accepted: TMessengerAcceptedMessage;
+  Proposal: TMessengerAcceptedMessage;
+  Stored: TMessengerAcceptanceStoreResult;
   Partition: Integer;
 begin
   ValidateCommand(ACommand);
 
-  { The permanent idempotency lookup is deliberately before authorization and
-    publishing. A retry of an already accepted request returns the canonical
-    result and never creates a second message. }
-  if FIdempotency.TryGetAccepted(ACommand.SenderUserId,
-    ACommand.ClientMessageId, Existing) then
-    Exit(TMessengerAcceptanceResult.Duplicate(Existing));
-
   if not FAuthorizer.CanSend(ACommand.SenderUserId, ACommand.ConversationId,
-    ACommand.TargetUserId) then
+    ACommand.DestinationKind, ACommand.DestinationId) then
     raise EMessengerUnauthorized.Create('Sender is not authorized for this conversation');
 
-  Partition := TMessengerPartitioning.PartitionFor(
+  Partition := TMessengerPartitioner.PartitionFor(
     ACommand.ConversationId, FPartitionCount);
 
   Message := TMessengerMessage.CreateV1(
@@ -162,17 +141,22 @@ begin
     FClock.UnixTimeMilliseconds,
     ACommand.PayloadJson);
 
-  Accepted := TMessengerAcceptedMessage.Create(
-    Message, ACommand.TargetUserId, Partition);
+  { Sequence=0 means proposal. The store assigns the canonical sequence and
+    writes message + outbox atomically. If a concurrent retry wins, the store
+    returns that winner instead of this proposal. }
+  Proposal := TMessengerAcceptedMessage.Create(
+    Message, ACommand.DestinationKind, ACommand.DestinationId, Partition, 0);
 
-  { Publish first; StoreAccepted only after durable sink acknowledges. Concrete
-    persistence implementations should make the product idempotency record
-    durable and race-safe (unique sender_user_id + client_message_id). }
-  FSink.PublishAccepted(Accepted);
-  FIdempotency.StoreAccepted(ACommand.SenderUserId,
-    ACommand.ClientMessageId, Accepted);
+  Stored := FStore.AcceptOrGet(ACommand, Proposal);
+  if not Stored.Accepted.IsCanonical then
+    raise EMessengerAcceptanceError.Create(
+      'Acceptance store returned a non-canonical message without sequence');
 
-  Result := TMessengerAcceptanceResult.NewAccepted(Accepted);
+  Result.Accepted := Stored.Accepted;
+  if Stored.WasDuplicate then
+    Result.Status := masDuplicate
+  else
+    Result.Status := masAccepted;
 end;
 
 end.
