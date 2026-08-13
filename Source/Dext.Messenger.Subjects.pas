@@ -23,6 +23,9 @@ type
     class function DeliveredReceipt(const AConversationId: string): string; static;
     class function ReadReceipt(const AConversationId: string): string; static;
 
+    class function AcceptedMessagePartition(APartition: Integer): string; static;
+    class function AcceptedMessageWildcard: string; static;
+
     class function MessageCreatedEvent: string; static;
     class function GroupMemberAddedEvent: string; static;
     class function GroupMemberRemovedEvent: string; static;
@@ -95,6 +98,18 @@ class function TMessengerSubjects.ReadReceipt(const AConversationId: string): st
 begin
   ValidateToken('conversation_id', AConversationId);
   Result := 'receipt.v1.read.' + AConversationId;
+end;
+
+class function TMessengerSubjects.AcceptedMessagePartition(APartition: Integer): string;
+begin
+  if APartition < 0 then
+    raise EMessengerSubjectError.Create('partition must not be negative');
+  Result := 'durable.v1.message.accepted.' + IntToStr(APartition);
+end;
+
+class function TMessengerSubjects.AcceptedMessageWildcard: string;
+begin
+  Result := 'durable.v1.message.accepted.*';
 end;
 
 class function TMessengerSubjects.MessageCreatedEvent: string;
