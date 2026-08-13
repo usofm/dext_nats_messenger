@@ -41,7 +41,7 @@ uses
 
 class function TMessengerWorkerLoopOptions.Default: TMessengerWorkerLoopOptions;
 begin
-  Result := Default(TMessengerWorkerLoopOptions);
+  Result := System.Default(TMessengerWorkerLoopOptions);
   Result.IdleSleepMs := 25;
   Result.OutboxBatchSize := 100;
 end;
@@ -83,7 +83,7 @@ var
   OutboxStats: TMessengerOutboxDispatchStats;
 begin
   OutboxStats := FOutbox.ProcessBatch(UnixMsNow, FOptions.OutboxBatchSize);
-  Result := OutboxStats.Published + FDelivery.ProcessOnce;
+  Result := OutboxStats.PublishedCount + FDelivery.ProcessOnce;
 end;
 
 procedure TMessengerWorkerRuntime.Run(const AShouldStop: TMessengerShouldStop);

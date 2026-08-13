@@ -7,6 +7,7 @@ uses
   Dext.Entity.Drivers.Interfaces,
   Dext.Messenger.Acceptance,
   Dext.Messenger.Commands,
+  Dext.Messenger.Models,
   Dext.Messenger.Outbox,
   Dext.Messenger.Persistence.DbContext;
 
@@ -53,8 +54,7 @@ implementation
 
 uses
   System.Rtti,
-  System.DateUtils,
-  Dext.Messenger.Models;
+  System.DateUtils;
 
 const
   SQL_EXISTING =
@@ -85,20 +85,23 @@ const
     ':outbox_id, ''message.accepted.v1'', :message_id, :partition_no, :sequence_no)';
 
   SQL_CLAIM =
-    'select o.outbox_id, o.attempt_count, o.available_at, ' +
+    'with candidates as (' +
+    'select o.outbox_id from messenger_outbox o ' +
+    'where o.status = 0 and o.available_at <= :now_at ' +
+    'and (o.lease_owner is null or o.lease_until <= :now_at2) ' +
+    'order by o.created_at for update skip locked limit :max_items' +
+    '), claimed as (' +
+    'update messenger_outbox o set lease_owner = :worker_id, ' +
+    'lease_until = :lease_until from candidates c ' +
+    'where o.outbox_id = c.outbox_id and o.status = 0 ' +
+    'returning o.outbox_id, o.attempt_count, o.available_at, ' +
+    'o.message_id, o.created_at' +
+    ') select c.outbox_id, c.attempt_count, c.available_at, ' +
     'm.message_id, m.client_message_id, m.conversation_id, m.sender_user_id, ' +
     'm.destination_kind, m.destination_id, m.sequence_no, m.partition_no, ' +
     'm.message_kind, m.payload_json::text, m.created_at ' +
-    'from messenger_outbox o ' +
-    'join messenger_messages m on m.message_id = o.message_id ' +
-    'where o.status = 0 and o.available_at <= :now_at ' +
-    'and (o.lease_owner is null or o.lease_until <= :now_at2) ' +
-    'order by o.created_at ' +
-    'for update of o skip locked limit :max_items';
-
-  SQL_SET_LEASE =
-    'update messenger_outbox set lease_owner = :worker_id, lease_until = :lease_until ' +
-    'where outbox_id = :outbox_id and status = 0';
+    'from claimed c join messenger_messages m on m.message_id = c.message_id ' +
+    'order by c.created_at';
 
   SQL_MARK_PUBLISHED =
     'update messenger_outbox set status = 1, published_at = now(), ' +
@@ -349,7 +352,7 @@ end;
 function TMessengerPostgreSQLStore.ClaimBatch(const AWorkerId: string;
   ANowUnixMs, ALeaseMs: Int64; AMaxItems: Integer): TArray<TMessengerOutboxItem>;
 var
-  SelectCmd, LeaseCmd: IDbCommand;
+  SelectCmd: IDbCommand;
   Reader: IDbReader;
   NowAt, LeaseUntil: TDateTime;
   Item: TMessengerOutboxItem;
@@ -373,6 +376,8 @@ begin
     SelectCmd.AddParam('now_at', TValue.From<TDateTime>(NowAt));
     SelectCmd.AddParam('now_at2', TValue.From<TDateTime>(NowAt));
     SelectCmd.AddParam('max_items', TValue.From<Integer>(AMaxItems));
+    SelectCmd.AddParam('worker_id', TValue.From<string>(AWorkerId));
+    SelectCmd.AddParam('lease_until', TValue.From<TDateTime>(LeaseUntil));
     Reader := SelectCmd.ExecuteQuery;
     try
       while Reader.Next do
@@ -385,13 +390,6 @@ begin
         Item.Accepted := Accepted;
         Item.LeaseOwner := AWorkerId;
         Item.LeaseUntilUnixMs := ANowUnixMs + ALeaseMs;
-
-        LeaseCmd := FContext.Connection.CreateCommand(SQL_SET_LEASE);
-        LeaseCmd.AddParam('worker_id', TValue.From<string>(AWorkerId));
-        LeaseCmd.AddParam('lease_until', TValue.From<TDateTime>(LeaseUntil));
-        LeaseCmd.AddParam('outbox_id', TValue.From<string>(Item.OutboxId));
-        if LeaseCmd.ExecuteNonQuery <> 1 then
-          raise EMessengerPostgreSQLError.Create('Failed to claim outbox row');
 
         Items[Count] := Item;
         Inc(Count);

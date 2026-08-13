@@ -49,7 +49,7 @@ const
 class function TMessengerDeliveryWorkerOptions.Default:
   TMessengerDeliveryWorkerOptions;
 begin
-  Result := Default(TMessengerDeliveryWorkerOptions);
+  Result := System.Default(TMessengerDeliveryWorkerOptions);
   Result.BatchSize := 128;
   Result.FetchExpiresMs := 2000;
   Result.AckWaitMs := 30000;

@@ -37,7 +37,7 @@ type
 
   TMessengerOutboxDispatchStats = record
     Claimed: Integer;
-    Published: Integer;
+    PublishedCount: Integer;
     Failed: Integer;
   end;
 
@@ -136,7 +136,7 @@ begin
     try
       FPublisher.PublishAccepted(Item.Accepted);
       FStore.MarkPublished(Item.OutboxId, FWorkerId);
-      Inc(Result.Published);
+      Inc(Result.PublishedCount);
     except
       on E: Exception do
       begin
