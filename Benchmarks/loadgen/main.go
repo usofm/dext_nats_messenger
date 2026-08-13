@@ -59,17 +59,16 @@ func percentile(v []time.Duration, p float64) time.Duration {
 }
 
 type config struct {
-	mode        string
-	url         string
-	token       string
-	connections int
-	concurrency int
-	duration    time.Duration
-	rate        int
-	insecureTLS bool
-	userPrefix  string
+	mode         string
+	url          string
+	token        string
+	connections  int
+	concurrency  int
+	duration     time.Duration
+	rate         int
+	insecureTLS  bool
 	conversation string
-	target      string
+	target       string
 }
 
 func main() {
@@ -82,7 +81,6 @@ func main() {
 	flag.DurationVar(&cfg.duration, "duration", 60*time.Second, "test duration")
 	flag.IntVar(&cfg.rate, "rate", 1000, "target HTTP requests/sec, 0 = unlimited")
 	flag.BoolVar(&cfg.insecureTLS, "insecure-tls", false, "skip TLS verification (test labs only)")
-	flag.StringVar(&cfg.userPrefix, "user-prefix", "load-user", "synthetic user prefix")
 	flag.StringVar(&cfg.conversation, "conversation", "load-conv", "conversation id for HTTP sends")
 	flag.StringVar(&cfg.target, "target", "load-target", "destination user for HTTP sends")
 	flag.Parse()
@@ -92,6 +90,12 @@ func main() {
 	}
 	if cfg.duration <= 0 {
 		fatal("duration must be positive")
+	}
+	if cfg.mode == "ws" && cfg.connections <= 0 {
+		fatal("connections must be positive")
+	}
+	if cfg.mode == "http" && cfg.concurrency <= 0 {
+		fatal("concurrency must be positive")
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -131,15 +135,21 @@ func runWebSockets(ctx context.Context, cfg config, c *counters, lat *latencyRec
 	sem := make(chan struct{}, 256)
 	connections := make(chan *websocket.Conn, cfg.connections)
 
+connectLoop:
 	for i := 0; i < cfg.connections; i++ {
 		select {
 		case <-ctx.Done():
-			break
+			break connectLoop
 		default:
 		}
+
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			break connectLoop
+		}
 		wg.Add(1)
-		sem <- struct{}{}
-		go func(i int) {
+		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
 			c.attempted.Add(1)
@@ -147,9 +157,14 @@ func runWebSockets(ctx context.Context, cfg config, c *counters, lat *latencyRec
 			if cfg.token != "" {
 				headers.Set("Authorization", "Bearer "+cfg.token)
 			}
-			hc := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.insecureTLS}}}
+			hc := &http.Client{Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.insecureTLS},
+			}}
 			start := time.Now()
-			conn, _, err := websocket.Dial(ctx, cfg.url, &websocket.DialOptions{HTTPClient: hc, HTTPHeader: headers})
+			conn, _, err := websocket.Dial(ctx, cfg.url, &websocket.DialOptions{
+				HTTPClient: hc,
+				HTTPHeader: headers,
+			})
 			lat.add(time.Since(start))
 			if err != nil {
 				c.failed.Add(1)
@@ -157,9 +172,15 @@ func runWebSockets(ctx context.Context, cfg config, c *counters, lat *latencyRec
 			}
 			c.succeeded.Add(1)
 			c.active.Add(1)
-			connections <- conn
-		}(i)
+			select {
+			case connections <- conn:
+			case <-ctx.Done():
+				_ = conn.Close(websocket.StatusNormalClosure, "load test cancelled")
+				c.active.Add(-1)
+			}
+		}()
 	}
+
 	wg.Wait()
 	fmt.Printf("opened %d websocket connections; holding until test deadline\n", c.active.Load())
 	<-ctx.Done()
@@ -232,11 +253,11 @@ func runHTTP(ctx context.Context, cfg config, c *counters, lat *latencyRecorder)
 func sendHTTP(ctx context.Context, client *http.Client, cfg config, worker, seq int, c *counters, lat *latencyRecorder) {
 	payload := map[string]any{
 		"ClientMessageId": fmt.Sprintf("load-%d-%d-%d", os.Getpid(), worker, seq),
-		"ConversationId": cfg.conversation,
+		"ConversationId":  cfg.conversation,
 		"DestinationType": "user",
-		"DestinationId": cfg.target,
-		"Kind": "text",
-		"PayloadJson": `{"text":"load"}`,
+		"DestinationId":   cfg.target,
+		"Kind":            "text",
+		"PayloadJson":     `{"text":"load"}`,
 	}
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
