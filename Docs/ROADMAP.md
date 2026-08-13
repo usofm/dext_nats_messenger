@@ -122,12 +122,13 @@ This document separates **repository implementation** from **external validation
 
 These items are intentionally **not** marked complete in chat because they require an actual Delphi/toolchain/runtime or multi-node lab run:
 
-- [ ] Compile all Delphi units with the repository's pinned Dext + `dext_nats` versions
+- [x] Compile all Delphi units with the repository's pinned Dext + `dext_nats` versions
 - [x] Execute `Tests/Dext.Messenger.Tests.dpr` with Delphi 12 and Delphi 13
 - [x] Run PostgreSQL integration tests against all current migrations
 - [x] Run NATS Core/JetStream publish, fetch, ACK, header and dedup integration tests
 - [x] Run JetStream replay, poison-to-DLQ, TERM and DLQ-unavailable/NAK tests
-- [ ] Build and exercise VCL client against a real Gateway
+- [x] Build the VCL client with Delphi 12 and Delphi 13
+- [ ] Exercise the VCL client against a real Gateway
 - [x] Run `go test`, `go vet`, and build the load generator
 - [ ] Execute direct-message throughput benchmark
 - [ ] Execute large-group fan-out benchmark

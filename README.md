@@ -200,8 +200,13 @@ $env:DELPHI_UNIT_PATH = '<Dext Sources>;<dext_nats Source>'
 For the isolated Win64 integration matrix:
 
 ```powershell
+./scripts/compile-gate.ps1
 ./scripts/integration-gate.ps1
 ```
+
+The compile gate builds all source units, the unit-test executable, and the VCL
+client with Delphi 12 and Delphi 13. Compiler warnings and hints fail the gate,
+and the 17-test unit suite is executed for each compiler.
 
 The integration gate validates Delphi 12/13, PostgreSQL transactional rollback,
 outbox lease recovery, unavailable-database behavior, JetStream dedup/replay,

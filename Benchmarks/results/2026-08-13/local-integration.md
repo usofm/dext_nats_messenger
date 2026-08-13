@@ -8,8 +8,8 @@ Capacity claim: **none**
 
 ## Tested source
 
-- `dext_nats_messenger`: `347a62375d939ce676c47440909d50ee60185587`
-- `dext_nats`: `3d04a71083b0e10e3a3a7edc3bd78e89393ced5b`
+- `dext_nats_messenger`: `f38403956227cbee59ae2f45273cdb51ce37bc94`
+- `dext_nats`: `18590ddd46d7d7d50b080e37aa84c36ac46dea8d`
 - Dext compatibility worktree: `412ed29207d2d1dc5d4a259a7739a615aed0c626`
 
 ## Host and topology
@@ -34,6 +34,7 @@ only the exact processes it started. Existing services on ports 5432 and
 ## Commands
 
 ```powershell
+./scripts/compile-gate.ps1
 ./scripts/integration-gate.ps1
 
 cd Benchmarks/loadgen
@@ -49,6 +50,8 @@ the Delphi 12 and Delphi 13 Win32 compilers against the same pinned Dext source.
 
 | Gate | Delphi 12 | Delphi 13 |
 |---|---:|---:|
+| All 47 source units compile with zero diagnostics | passed | passed |
+| VCL client build | passed | passed |
 | Dext.Testing contract/unit suite | 17 passed, 0 failed | 17 passed, 0 failed |
 | Win64 integration assertions | 48 passed, 0 failed | 48 passed, 0 failed |
 | PostgreSQL schema application | passed | passed |
@@ -85,6 +88,11 @@ and Delphi 13, including the live `Nak_ShouldRedeliver` integration test.
    acknowledgement. The server kept the message ack-pending until `AckWait`
    expired. The wire payload and its contract test now use `-NAK`; the live
    DLQ-outage test confirms delayed redelivery on a three-node cluster.
+6. The full compile matrix exposed one `W1010` and four `H2077` diagnostics in
+   `dext_nats`. The intentional `Dispatch` name hiding is now declared with
+   `reintroduce`; redundant assignments were removed, and receive-loop recovery
+   now continues explicitly after a handled socket failure. Both compilers now
+   build the full matrix with zero warnings and hints.
 
 For an outbox batch of `N` rows, the claim phase therefore changes from
 `1 + N` database commands to one database command. With the default batch size
