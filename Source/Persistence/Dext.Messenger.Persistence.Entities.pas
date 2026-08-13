@@ -12,7 +12,7 @@ type
   TMessengerConversationEntity = class
   private
     FId: StringType;
-    FKind: IntegerType;
+    FKind: IntType;
     FTitle: StringType;
     FCreatedBy: StringType;
     FCreatedAt: TDateTime;
@@ -22,7 +22,7 @@ type
     [PK, MaxLength(64)]
     property Id: StringType read FId write FId;
     [Required]
-    property Kind: IntegerType read FKind write FKind;
+    property Kind: IntType read FKind write FKind;
     [MaxLength(200)]
     property Title: StringType read FTitle write FTitle;
     [Required, MaxLength(128)]
@@ -40,11 +40,11 @@ type
     FClientMessageId: StringType;
     FConversationId: StringType;
     FSenderUserId: StringType;
-    FDestinationKind: IntegerType;
+    FDestinationKind: IntType;
     FDestinationId: StringType;
     FSequenceNo: Int64Type;
-    FPartitionNo: IntegerType;
-    FMessageKind: IntegerType;
+    FPartitionNo: IntType;
+    FMessageKind: IntType;
     FPayloadJson: StringType;
     FCreatedAt: TDateTime;
     FPersistedAt: TDateTime;
@@ -58,15 +58,15 @@ type
     [Required, MaxLength(128)]
     property SenderUserId: StringType read FSenderUserId write FSenderUserId;
     [Required]
-    property DestinationKind: IntegerType read FDestinationKind write FDestinationKind;
+    property DestinationKind: IntType read FDestinationKind write FDestinationKind;
     [Required, MaxLength(128)]
     property DestinationId: StringType read FDestinationId write FDestinationId;
     [Required]
     property SequenceNo: Int64Type read FSequenceNo write FSequenceNo;
     [Required]
-    property PartitionNo: IntegerType read FPartitionNo write FPartitionNo;
+    property PartitionNo: IntType read FPartitionNo write FPartitionNo;
     [Required]
-    property MessageKind: IntegerType read FMessageKind write FMessageKind;
+    property MessageKind: IntType read FMessageKind write FMessageKind;
     [Required]
     property PayloadJson: StringType read FPayloadJson write FPayloadJson;
     property CreatedAt: TDateTime read FCreatedAt write FCreatedAt;
