@@ -9,6 +9,7 @@ uses
   Dext.Testing.Fluent,
   Dext.Messenger.Models,
   Dext.Messenger.Subjects,
+  Dext.Messenger.Partitioning,
   Dext.Messenger.Codec.Json;
 
 type
@@ -20,6 +21,12 @@ type
 
     [Test, Category('Unit'), Category('Security')]
     procedure Subjects_ShouldRejectWildcardInjection;
+
+    [Test, Category('Unit'), Category('Protocol')]
+    procedure Subjects_ShouldBuildAcceptedPartitionSubject;
+
+    [Test, Category('Unit'), Category('Partitioning')]
+    procedure Partitioner_ShouldBeDeterministicAndBounded;
 
     [Test, Category('Unit'), Category('Protocol')]
     procedure JsonCodec_ShouldRoundTripTextMessage;
@@ -44,6 +51,28 @@ begin
       Raised := True;
   end;
   Should(Raised).BeTrue;
+end;
+
+procedure TMessengerCoreTests.Subjects_ShouldBuildAcceptedPartitionSubject;
+begin
+  Should(TMessengerSubjects.AcceptedMessagePartition(7)).Be(
+    'durable.v1.message.accepted.7'
+  );
+  Should(TMessengerSubjects.AcceptedMessageWildcard).Be(
+    'durable.v1.message.accepted.*'
+  );
+end;
+
+procedure TMessengerCoreTests.Partitioner_ShouldBeDeterministicAndBounded;
+var
+  A, B: Integer;
+begin
+  A := TMessengerPartitioner.PartitionFor('conversation-42', 64);
+  B := TMessengerPartitioner.PartitionFor('conversation-42', 64);
+
+  Should(A).Be(B);
+  Should(A >= 0).BeTrue;
+  Should(A < 64).BeTrue;
 end;
 
 procedure TMessengerCoreTests.JsonCodec_ShouldRoundTripTextMessage;
