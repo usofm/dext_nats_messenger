@@ -19,6 +19,7 @@ uses
   System.SysUtils,
   Dext.Messenger.Gateway.Api,
   Dext.Messenger.Gateway.ConversationApi,
+  Dext.Messenger.Gateway.ConversationQueryApi,
   Dext.Messenger.Gateway.SyncApi,
   Dext.Messenger.Gateway.ReceiptApi,
   Dext.Messenger.Gateway.MediaApi,
@@ -34,6 +35,7 @@ begin
   Builder := App.GetBuilder;
   TMessengerGatewayEndpoints.Map(Builder);
   TMessengerGatewayConversationEndpoints.Map(Builder);
+  TMessengerGatewayConversationQueryEndpoints.Map(Builder);
   TMessengerGatewaySyncEndpoints.Map(Builder);
   TMessengerGatewayReceiptEndpoints.Map(Builder);
   TMessengerGatewayMediaEndpoints.Map(Builder);
