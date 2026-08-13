@@ -1,0 +1,60 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: messenger
+      POSTGRES_USER: messenger
+      POSTGRES_PASSWORD: messenger_dev_only
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../database:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U messenger -d messenger"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  nats-1:
+    image: nats:2.12-alpine
+    command: ["-c", "/etc/nats/nats.conf"]
+    volumes:
+      - ./nats/nats-1.conf:/etc/nats/nats.conf:ro
+      - nats1_data:/data/jetstream
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+
+  nats-2:
+    image: nats:2.12-alpine
+    command: ["-c", "/etc/nats/nats.conf"]
+    volumes:
+      - ./nats/nats-2.conf:/etc/nats/nats.conf:ro
+      - nats2_data:/data/jetstream
+
+  nats-3:
+    image: nats:2.12-alpine
+    command: ["-c", "/etc/nats/nats.conf"]
+    volumes:
+      - ./nats/nats-3.conf:/etc/nats/nats.conf:ro
+      - nats3_data:/data/jetstream
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: messenger-dev
+      MINIO_ROOT_PASSWORD: messenger-dev-password
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+volumes:
+  postgres_data:
+  nats1_data:
+  nats2_data:
+  nats3_data:
+  minio_data:
