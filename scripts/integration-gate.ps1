@@ -81,8 +81,14 @@ function Compile-Integration([string]$Name, [string]$Compiler) {
     "-U$unitPath", "-I$unitPath", $project
   )
   Write-Host "Compiling integration suite with $Name..." -ForegroundColor Cyan
-  $compilerOutput = & $Compiler @arguments 2>&1
+  $compilerOutput = @(& $Compiler @arguments 2>&1)
   $compilerExitCode = $LASTEXITCODE
+  if (($compilerExitCode -ne 0) -and ($compilerOutput.Count -eq 0)) {
+    Write-Warning "$Name compiler exited without diagnostics; retrying once"
+    Start-Sleep -Milliseconds 500
+    $compilerOutput = @(& $Compiler @arguments 2>&1)
+    $compilerExitCode = $LASTEXITCODE
+  }
   $compilerOutput | ForEach-Object { Write-Host $_ }
   if ($compilerExitCode -ne 0) {
     throw "$Name integration compilation failed with exit code $compilerExitCode"
