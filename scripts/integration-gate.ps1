@@ -42,6 +42,18 @@ function Wait-TcpPort([int]$Port, [int]$TimeoutMs = 15000) {
   throw "Port $Port did not become ready within ${TimeoutMs}ms"
 }
 
+function Assert-TcpPortClosed([int]$Port) {
+  $client = [System.Net.Sockets.TcpClient]::new()
+  try {
+    $task = $client.ConnectAsync('127.0.0.1', $Port)
+    if ($task.Wait(300) -and $client.Connected) {
+      throw "Outage-test port $Port already has a listener"
+    }
+  }
+  catch [System.AggregateException] { }
+  finally { $client.Dispose() }
+}
+
 function Get-RecursiveUnitPath([string[]]$Roots) {
   $dirs = [System.Collections.Generic.List[string]]::new()
   foreach ($root in $Roots) {
@@ -156,6 +168,7 @@ function Run-Suite([string]$Name, [string]$Exe, [int]$Ordinal) {
     $runId = $Name.ToLowerInvariant() + [guid]::NewGuid().ToString('N').Substring(0, 12) + $Ordinal
     $env:MESSENGER_TEST_RUN_ID = $runId
     $env:MESSENGER_TEST_PG = "Server=127.0.0.1;Port=$PostgreSqlPort;Database=$databaseName;User_Name=postgres;VendorLib=$pgLib"
+    $env:MESSENGER_TEST_PG_OUTAGE = "Server=127.0.0.1;Port=$($PostgreSqlPort + 1);Database=$databaseName;User_Name=postgres;VendorLib=$pgLib"
     $env:MESSENGER_TEST_NATS_HOST = '127.0.0.1'
     $env:MESSENGER_TEST_NATS_PORT = [string]$NatsClientPort
     $env:MESSENGER_TEST_NATS_KILL_PID = [string]$natsProcesses[0].Id
@@ -191,6 +204,7 @@ try {
   Assert-Path $dcc13 'Delphi 13 Win64 compiler'
 
   New-Item -ItemType Directory -Path $tempRoot | Out-Null
+  Assert-TcpPortClosed ($PostgreSqlPort + 1)
   $exe12 = Compile-Integration 'Delphi12' $dcc12
   $exe13 = Compile-Integration 'Delphi13' $dcc13
 
@@ -219,7 +233,7 @@ finally {
     catch { Write-Warning "Could not stop temporary PostgreSQL: $($_.Exception.Message)" }
   }
   foreach ($name in @(
-    'MESSENGER_TEST_RUN_ID', 'MESSENGER_TEST_PG', 'MESSENGER_TEST_NATS_HOST',
+    'MESSENGER_TEST_RUN_ID', 'MESSENGER_TEST_PG', 'MESSENGER_TEST_PG_OUTAGE', 'MESSENGER_TEST_NATS_HOST',
     'MESSENGER_TEST_NATS_PORT', 'MESSENGER_TEST_NATS_KILL_PID'
   )) {
     Remove-Item -Path ('Env:' + $name) -ErrorAction SilentlyContinue
