@@ -203,7 +203,10 @@ For the isolated Win64 integration matrix:
 ./scripts/integration-gate.ps1
 ```
 
-The integration gate is intended to validate Delphi, PostgreSQL, NATS/JetStream, deduplication, and failover behavior in an isolated test environment.
+The integration gate validates Delphi 12/13, PostgreSQL transactional rollback,
+outbox lease recovery, unavailable-database behavior, JetStream dedup/replay,
+poison-to-DLQ-before-TERM, DLQ-outage redelivery, and one-node NATS/JetStream
+failover in an isolated test environment.
 
 The GitHub workflow builds and vets the Go load generator and runs structural checks. A self-hosted Windows/Delphi runner can enable Delphi CI through the `DELPHI_SELF_HOSTED` repository variable.
 

@@ -126,7 +126,7 @@ These items are intentionally **not** marked complete in chat because they requi
 - [x] Execute `Tests/Dext.Messenger.Tests.dpr` with Delphi 12 and Delphi 13
 - [x] Run PostgreSQL integration tests against all current migrations
 - [x] Run NATS Core/JetStream publish, fetch, ACK, header and dedup integration tests
-- [ ] Run JetStream replay and DLQ behavior tests
+- [x] Run JetStream replay, poison-to-DLQ, TERM and DLQ-unavailable/NAK tests
 - [ ] Build and exercise VCL client against a real Gateway
 - [x] Run `go test`, `go vet`, and build the load generator
 - [ ] Execute direct-message throughput benchmark
@@ -135,8 +135,10 @@ These items are intentionally **not** marked complete in chat because they requi
 - [ ] Execute distributed 300k concurrent WebSocket test
 - [x] Execute one-node NATS loss, client reconnect/resubscribe and JetStream quorum scenario
 - [ ] Execute Gateway rolling-restart/reconnect-storm scenario
-- [ ] Execute PostgreSQL outage/slow-storage scenarios
-- [ ] Execute outbox/delivery-worker crash recovery scenarios
+- [x] Execute PostgreSQL unavailable and transaction-rollback scenarios
+- [ ] Execute PostgreSQL slow-storage scenario
+- [x] Execute outbox lease-expiry/reclaim after worker loss
+- [ ] Execute delivery-worker process crash recovery scenario
 - [ ] Profile CPU, allocation, locks, queues, network and storage
 - [ ] Fix/optimize findings and repeat until SLOs are met
 - [ ] Publish reproducible capacity report

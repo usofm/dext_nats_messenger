@@ -8,8 +8,8 @@ Capacity claim: **none**
 
 ## Tested source
 
-- `dext_nats_messenger`: `072830e68d41e22e551aec414c61b8156f36761c`
-- `dext_nats`: `ed6c27769904783308fdb0e85f5bbece959523c4`
+- `dext_nats_messenger`: `347a62375d939ce676c47440909d50ee60185587`
+- `dext_nats`: `3d04a71083b0e10e3a3a7edc3bd78e89393ced5b`
 - Dext compatibility worktree: `412ed29207d2d1dc5d4a259a7739a615aed0c626`
 
 ## Host and topology
@@ -50,17 +50,25 @@ the Delphi 12 and Delphi 13 Win32 compilers against the same pinned Dext source.
 | Gate | Delphi 12 | Delphi 13 |
 |---|---:|---:|
 | Dext.Testing contract/unit suite | 17 passed, 0 failed | 17 passed, 0 failed |
-| Win64 integration assertions | 27 passed, 0 failed | 27 passed, 0 failed |
+| Win64 integration assertions | 48 passed, 0 failed | 48 passed, 0 failed |
 | PostgreSQL schema application | passed | passed |
+| PostgreSQL transaction rollback after failed insert | passed | passed |
+| PostgreSQL unavailable/fail-closed behavior | passed | passed |
+| Outbox lease exclusion and reclaim after worker loss | passed | passed |
 | NATS Core publish/subscribe | passed | passed |
 | JetStream three-replica topology | passed | passed |
 | JetStream publish deduplication | passed | passed |
 | Pull fetch, headers, decode and ACK | passed | passed |
+| Replay from a consumer created after publication | passed | passed |
+| Poison event copied to durable DLQ before TERM | passed | passed |
+| DLQ outage causes NAK and source redelivery | passed | passed |
 | Connected NATS node termination | passed | passed |
 | Automatic reconnect and resubscribe | passed | passed |
-| JetStream availability with one node down | passed | passed |
+| JetStream leader election and availability with one node down | passed | passed |
 
 The Go load-generator package passed `go test`, `go vet`, and `go build`.
+The full `dext_nats` Win32 suite also passed 290/290 tests on both Delphi 12
+and Delphi 13, including the live `Nak_ShouldRedeliver` integration test.
 
 ## Defects found and corrected
 
@@ -73,6 +81,10 @@ The Go load-generator package passed `go test`, `go vet`, and `go build`.
 4. The old outbox batch claim performed one select plus one update command per
    claimed row while the reader remained open. It now uses one atomic
    `WITH candidates ... UPDATE ... RETURNING` command.
+5. `dext_nats` emitted `+NAK`, which is not a valid JetStream negative
+   acknowledgement. The server kept the message ack-pending until `AckWait`
+   expired. The wire payload and its contract test now use `-NAK`; the live
+   DLQ-outage test confirms delayed redelivery on a three-node cluster.
 
 For an outbox batch of `N` rows, the claim phase therefore changes from
 `1 + N` database commands to one database command. With the default batch size
@@ -83,9 +95,8 @@ messages-per-second claim.
 ## Remaining validation
 
 - full Gateway/VCL end-to-end execution;
-- JetStream replay, poison event and DLQ-unavailable behavior;
-- PostgreSQL outage and slow-storage injection;
-- outbox/delivery-worker crash recovery;
+- PostgreSQL slow-storage injection;
+- delivery-worker process crash recovery beyond the validated outbox lease reclaim;
 - Gateway rolling restart and reconnect storm;
 - direct, group-fanout, 100k and distributed 300k load tests;
 - CPU/allocation/lock/queue/network/storage profiling with p95/p99 latency.
