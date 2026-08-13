@@ -1,5 +1,9 @@
 -- Dext NATS Messenger - PostgreSQL durable schema v1
 -- PostgreSQL 17/18 target. Business access is intended through Dext Entity ORM.
+--
+-- CRITICAL INVARIANT:
+-- message row + conversation sequence + outbox row are committed in ONE DB
+-- transaction. NATS/JetStream publication happens asynchronously from outbox.
 
 CREATE TABLE IF NOT EXISTS messenger_conversations (
     id              varchar(64) PRIMARY KEY,
@@ -29,7 +33,8 @@ CREATE TABLE IF NOT EXISTS messenger_messages (
     client_message_id  varchar(128) NOT NULL,
     conversation_id    varchar(64) NOT NULL REFERENCES messenger_conversations(id) ON DELETE CASCADE,
     sender_user_id     varchar(128) NOT NULL,
-    target_user_id     varchar(128),
+    destination_kind   smallint NOT NULL CHECK (destination_kind IN (1,2)), -- 1=user, 2=group
+    destination_id     varchar(128) NOT NULL,
     sequence_no        bigint NOT NULL CHECK (sequence_no > 0),
     partition_no       integer NOT NULL CHECK (partition_no >= 0),
     message_kind       smallint NOT NULL,
@@ -47,6 +52,36 @@ CREATE INDEX IF NOT EXISTS ix_messenger_messages_conv_seq
 
 CREATE INDEX IF NOT EXISTS ix_messenger_messages_sender_created
     ON messenger_messages(sender_user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS ix_messenger_messages_destination
+    ON messenger_messages(destination_kind, destination_id, created_at DESC);
+
+-- Transactional outbox. One row exists for each durable event that must reach
+-- NATS/JetStream. Workers claim rows with SKIP LOCKED/lease semantics.
+CREATE TABLE IF NOT EXISTS messenger_outbox (
+    outbox_id           varchar(160) PRIMARY KEY,
+    event_type          varchar(80) NOT NULL,
+    message_id          varchar(64) NOT NULL REFERENCES messenger_messages(message_id) ON DELETE CASCADE,
+    partition_no        integer NOT NULL CHECK (partition_no >= 0),
+    sequence_no         bigint NOT NULL CHECK (sequence_no > 0),
+    status              smallint NOT NULL DEFAULT 0 CHECK (status IN (0,1)), -- pending/published
+    attempt_count       integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    available_at        timestamptz NOT NULL DEFAULT now(),
+    lease_owner         varchar(128),
+    lease_until         timestamptz,
+    last_error          varchar(2000),
+    created_at          timestamptz NOT NULL DEFAULT now(),
+    published_at        timestamptz,
+    CONSTRAINT uq_messenger_outbox_message_event UNIQUE (message_id, event_type)
+);
+
+CREATE INDEX IF NOT EXISTS ix_messenger_outbox_pending
+    ON messenger_outbox(status, available_at, created_at)
+    WHERE status = 0;
+
+CREATE INDEX IF NOT EXISTS ix_messenger_outbox_lease
+    ON messenger_outbox(lease_until)
+    WHERE status = 0 AND lease_owner IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS messenger_user_cursors (
     user_id             varchar(128) NOT NULL,
@@ -81,18 +116,46 @@ CREATE TABLE IF NOT EXISTS messenger_message_receipts (
 CREATE INDEX IF NOT EXISTS ix_messenger_receipts_user_time
     ON messenger_message_receipts(user_id, at_time DESC);
 
--- Atomic conversation sequencing. This single statement should be executed in
--- the same DB transaction that inserts messenger_messages.
+-- REFERENCE ACCEPTANCE TRANSACTION
+-- --------------------------------
+-- BEGIN;
 --
+-- 1) Resolve duplicate first:
+-- SELECT message_id, conversation_id, sequence_no, ...
+-- FROM messenger_messages
+-- WHERE sender_user_id = :sender_user_id
+--   AND client_message_id = :client_message_id;
+--
+-- If found, compare immutable command fields. If they differ, return an
+-- idempotency conflict. If equal, return the existing canonical row.
+--
+-- 2) Allocate conversation sequence under row lock:
 -- UPDATE messenger_conversations
 -- SET last_sequence = last_sequence + 1,
 --     last_message_at = :created_at
 -- WHERE id = :conversation_id
 -- RETURNING last_sequence;
 --
--- Retry safety is guaranteed by uq_messenger_sender_client. A persistence
--- adapter should first resolve an existing row for the same sender/client key
--- or handle unique_violation as an idempotent duplicate.
+-- 3) INSERT messenger_messages using returned last_sequence.
+--
+-- 4) INSERT messenger_outbox(
+--      outbox_id, event_type, message_id, partition_no, sequence_no)
+--    VALUES (
+--      'message.accepted:' || :message_id,
+--      'message.accepted.v1', :message_id, :partition_no, :sequence_no);
+--
+-- COMMIT;
+--
+-- The unique (sender_user_id, client_message_id) constraint is the final race
+-- guard. On unique_violation, rollback and re-read the canonical existing row.
+
+-- REFERENCE OUTBOX CLAIM
+-- ----------------------
+-- Use a short DB transaction with SELECT ... FOR UPDATE SKIP LOCKED to claim
+-- pending rows, set lease_owner/lease_until, commit, then publish outside the
+-- transaction. On success mark published; on failure clear lease and schedule
+-- available_at with exponential backoff. JetStream Nats-Msg-Id makes publish
+-- retries broker-idempotent inside its deduplication window.
 
 -- Monotonic cursor update pattern:
 -- INSERT INTO messenger_user_cursors(user_id, conversation_id, delivered_sequence, read_sequence)
