@@ -6,7 +6,10 @@ uses
   System.SysUtils,
   Dext.Net.Nats.JetStream,
   Dext.Messenger.Commands,
-  Dext.Messenger.Transport;
+  Dext.Messenger.Models,
+  Dext.Messenger.Transport,
+  Dext.Messenger.DeadLetter,
+  Dext.Messenger.Acceptance;
 
 type
   EMessengerDeliveryPoison = class(Exception);
@@ -20,22 +23,23 @@ type
     class function Decode(const AData: TBytes): TMessengerAcceptedMessage; static;
   end;
 
-  { Consumes canonical durable events from JetStream and fans them to Core NATS.
-    Core NATS is intentionally online-only; offline recovery comes from DB sync. }
   TMessengerJetStreamDeliveryProcessor = class
   private
     FJetStream: TDextNatsJetStreamContext;
     FTransport: IMessengerTransport;
+    FDeadLetter: IMessengerDeadLetterSink;
+    FClock: IMessengerClock;
     FRetryDelayMs: Integer;
+    procedure HandlePoison(const AMsg: TNatsJsMsg; const AError: Exception);
   public
     constructor Create(AJetStream: TDextNatsJetStreamContext;
-      const ATransport: IMessengerTransport; ARetryDelayMs: Integer = 500);
+      const ATransport: IMessengerTransport;
+      const ADeadLetter: IMessengerDeadLetterSink;
+      const AClock: IMessengerClock;
+      ARetryDelayMs: Integer = 500);
     procedure Process(const AMsg: TNatsJsMsg);
   end;
 
-  { Gateway/client-side subscription helper for the sequenced production
-    delivery envelope. This is separate from the bootstrap MessageService that
-    publishes raw TMessengerMessage in developer/direct-NATS mode. }
   TMessengerOnlineDeliveryService = class
   private
     FTransport: IMessengerTransport;
@@ -50,7 +54,6 @@ type
 implementation
 
 uses
-  System.Classes,
   Dext.Core.Span,
   Dext.Json.Utf8,
   Dext.Net.Nats.Protocol,
@@ -235,7 +238,7 @@ var
   DestinationId: string;
   DestinationKind: TMessengerDestinationKind;
   MessageJson: TBytes;
-  Message: Dext.Messenger.Models.TMessengerMessage;
+  Message: TMessengerMessage;
 begin
   Version := 0;
   Partition := -1;
@@ -257,7 +260,8 @@ begin
     if R.TokenType <> TJsonTokenType.PropertyName then
       raise EMessengerDeliveryPoison.Create('Invalid delivery envelope');
     Name := R.GetString;
-    if not R.Read then raise EMessengerDeliveryPoison.Create('Unexpected end of delivery envelope');
+    if not R.Read then
+      raise EMessengerDeliveryPoison.Create('Unexpected end of delivery envelope');
 
     if Name = 'version' then Version := R.GetInt32
     else if Name = 'sequence' then Sequence := R.GetInt64
@@ -265,7 +269,8 @@ begin
     else if Name = 'destination_kind' then KindText := R.GetString
     else if Name = 'destination_id' then DestinationId := R.GetString
     else if Name = 'message' then MessageJson := ReadCurrentJsonValue(R)
-    else if R.TokenType in [TJsonTokenType.StartObject, TJsonTokenType.StartArray] then R.Skip;
+    else if R.TokenType in [TJsonTokenType.StartObject, TJsonTokenType.StartArray] then
+      R.Skip;
   end;
 
   if Version <> 1 then raise EMessengerDeliveryPoison.Create('Unsupported delivery version');
@@ -280,15 +285,50 @@ end;
 
 constructor TMessengerJetStreamDeliveryProcessor.Create(
   AJetStream: TDextNatsJetStreamContext; const ATransport: IMessengerTransport;
+  const ADeadLetter: IMessengerDeadLetterSink; const AClock: IMessengerClock;
   ARetryDelayMs: Integer);
 begin
   inherited Create;
   if not Assigned(AJetStream) then raise EArgumentNilException.Create('AJetStream');
   if ATransport = nil then raise EArgumentNilException.Create('ATransport');
+  if ADeadLetter = nil then raise EArgumentNilException.Create('ADeadLetter');
+  if AClock = nil then raise EArgumentNilException.Create('AClock');
   if ARetryDelayMs < 0 then raise EArgumentOutOfRangeException.Create('ARetryDelayMs');
   FJetStream := AJetStream;
   FTransport := ATransport;
+  FDeadLetter := ADeadLetter;
+  FClock := AClock;
   FRetryDelayMs := ARetryDelayMs;
+end;
+
+procedure TMessengerJetStreamDeliveryProcessor.HandlePoison(
+  const AMsg: TNatsJsMsg; const AError: Exception);
+var
+  DL: TMessengerDeadLetter;
+  PartitionText: string;
+begin
+  DL := Default(TMessengerDeadLetter);
+  DL.SourceStream := AMsg.Stream;
+  DL.SourceConsumer := AMsg.Consumer;
+  DL.SourceSubject := AMsg.Subject;
+  DL.SourceStreamSequence := AMsg.StreamSequence;
+  DL.Partition := 0;
+  PartitionText := AMsg.Headers.GetValue(HDR_PARTITION);
+  if not TryStrToInt(PartitionText, DL.Partition) or (DL.Partition < 0) then
+    DL.Partition := 0;
+  DL.ErrorClass := AError.ClassName;
+  DL.ErrorMessage := AError.Message;
+  DL.FailedAtUnixMs := FClock.UnixTimeMilliseconds;
+  DL.Payload := AMsg.Payload;
+
+  try
+    FDeadLetter.Write(DL);
+    { TERM is safe only after diagnostic evidence was durably written. }
+    FJetStream.Term(AMsg);
+  except
+    { If DLQ itself is unavailable, retain the original message for retry. }
+    FJetStream.Nak(AMsg, FRetryDelayMs);
+  end;
 end;
 
 procedure TMessengerJetStreamDeliveryProcessor.Process(const AMsg: TNatsJsMsg);
@@ -297,7 +337,7 @@ var
   Sequence: Int64;
   Partition: Integer;
   DestinationKind: TMessengerDestinationKind;
-  Message: Dext.Messenger.Models.TMessengerMessage;
+  Message: TMessengerMessage;
   Accepted: TMessengerAcceptedMessage;
   Subject: string;
 begin
@@ -330,7 +370,7 @@ begin
     FJetStream.Ack(AMsg);
   except
     on E: EMessengerDeliveryPoison do
-      FJetStream.Term(AMsg);
+      HandlePoison(AMsg, E);
     on E: Exception do
       FJetStream.Nak(AMsg, FRetryDelayMs);
   end;
