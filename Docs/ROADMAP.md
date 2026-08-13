@@ -109,7 +109,7 @@ This document separates **repository implementation** from **external validation
 - [x] GitHub Actions structural/Go job
 - [x] Optional self-hosted Delphi CI job
 
-## Milestone 8 — Scale/reliability tooling — implementation complete; execution pending
+## Milestone 8 — Scale/reliability tooling — implementation complete; execution partial
 
 - [x] Distributed synthetic WebSocket load generator
 - [x] Authenticated HTTP send load mode
@@ -123,22 +123,27 @@ This document separates **repository implementation** from **external validation
 These items are intentionally **not** marked complete in chat because they require an actual Delphi/toolchain/runtime or multi-node lab run:
 
 - [ ] Compile all Delphi units with the repository's pinned Dext + `dext_nats` versions
-- [ ] Execute `Tests/Dext.Messenger.Tests.dpr`
-- [ ] Run PostgreSQL integration tests against all migrations
-- [ ] Run NATS/JetStream integration/replay/DLQ tests
+- [x] Execute `Tests/Dext.Messenger.Tests.dpr` with Delphi 12 and Delphi 13
+- [x] Run PostgreSQL integration tests against all current migrations
+- [x] Run NATS Core/JetStream publish, fetch, ACK, header and dedup integration tests
+- [ ] Run JetStream replay and DLQ behavior tests
 - [ ] Build and exercise VCL client against a real Gateway
-- [ ] Run `go test`, `go vet`, and build the load generator in CI
+- [x] Run `go test`, `go vet`, and build the load generator
 - [ ] Execute direct-message throughput benchmark
 - [ ] Execute large-group fan-out benchmark
 - [ ] Execute 100k concurrent WebSocket test
 - [ ] Execute distributed 300k concurrent WebSocket test
-- [ ] Execute NATS node-loss and JetStream quorum scenarios
+- [x] Execute one-node NATS loss, client reconnect/resubscribe and JetStream quorum scenario
 - [ ] Execute Gateway rolling-restart/reconnect-storm scenario
 - [ ] Execute PostgreSQL outage/slow-storage scenarios
 - [ ] Execute outbox/delivery-worker crash recovery scenarios
 - [ ] Profile CPU, allocation, locks, queues, network and storage
 - [ ] Fix/optimize findings and repeat until SLOs are met
 - [ ] Publish reproducible capacity report
+
+The completed local validation above is documented in
+`Benchmarks/results/2026-08-13/local-integration.md`. It is a functional and
+failure-path result, not a throughput or concurrent-connection capacity claim.
 
 ## Definition of done for a scale claim
 

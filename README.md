@@ -148,6 +148,18 @@ $env:DELPHI_UNIT_PATH = '<Dext Sources>;<dext_nats Source>'
 ./Tests/Dext.Messenger.Tests.exe
 ```
 
+For the isolated Win64 integration matrix (Delphi 12 and 13, PostgreSQL 18,
+three-node NATS/JetStream, deduplication and one-node failover):
+
+```powershell
+./scripts/integration-gate.ps1
+```
+
+The integration gate uses separate local ports and temporary data directories;
+it does not modify or stop an existing PostgreSQL or NATS service. Its current
+Windows prerequisites and exact tested versions are recorded in the dated
+reports under `Benchmarks/results/`.
+
 The GitHub workflow always builds/vets the Go load generator and runs structural checks. A self-hosted Windows/Delphi runner can enable the Delphi job through the `DELPHI_SELF_HOSTED` repository variable.
 
 ## Scale validation
