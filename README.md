@@ -1,182 +1,183 @@
 # Dext NATS Messenger
 
-High-performance distributed messaging and chat infrastructure for Delphi, built on **Dext** and **NATS / JetStream**.
+High-performance distributed personal/group messaging infrastructure for Delphi, built on **Dext**, **dext_nats**, **NATS/JetStream**, PostgreSQL and object storage.
 
-> Status: early architecture and bootstrap phase. APIs are expected to evolve before the first stable release.
+> **Implementation status:** feature-complete architecture branch. Compile, integration, failure-injection and capacity validation are intentionally left for the Codex/lab validation phase. No 100k/300k capacity claim is made until measured.
 
-## Why this project exists
+## What is implemented
 
-`dext_nats_messenger` is intended to provide the reusable server-side building blocks for personal chat, group chat, presence, typing indicators, delivery/read receipts, multi-device sessions, offline delivery, notifications, and later media metadata.
+The repository contains the complete application building blocks for:
 
-The design target is not a single-process chat demo. The target is a horizontally scalable system that can grow toward **hundreds of thousands of concurrent connections** without coupling application state to one server process.
+- personal/direct conversations with canonical pair creation;
+- group conversations, roles and member management;
+- transactional message acceptance and permanent idempotency;
+- per-conversation canonical sequence allocation;
+- PostgreSQL transactional outbox;
+- JetStream durable accepted-message pipeline;
+- horizontally scalable pull delivery workers;
+- Core NATS online user/group fan-out;
+- presence, typing and realtime receipts;
+- durable delivered/read receipts and monotonic user cursors;
+- offline/reconnect synchronization and paged conversation history;
+- paged conversation list queries;
+- multi-device connection registry;
+- JWT-authenticated Dext Gateway APIs;
+- Dext WebSocket Hub hosting;
+- per-user/per-operation rate limiting;
+- bounded outbound queue / slow-consumer policy;
+- DLQ with fail-safe poison-message handling;
+- media upload/commit/resolve contracts for S3/MinIO-style storage;
+- privacy-safe push-notification contracts;
+- health/metrics contracts;
+- Delphi HTTP client facade and VCL demo client;
+- Dext.Testing test runner and contract tests;
+- distributed Go WebSocket/HTTP load generator;
+- three-node NATS/JetStream + PostgreSQL + MinIO development topology;
+- failure-injection matrix and CI/quality-gate scaffolding.
 
-The project deliberately separates four concerns:
-
-1. **Dext Gateway / Application Layer** — client-facing HTTP/WebSocket endpoints, authentication, authorization, validation, rate limiting and protocol versioning.
-2. **NATS Core** — low-latency ephemeral real-time distribution such as online delivery, presence and typing.
-3. **JetStream** — durable event/delivery paths that require persistence, replay and acknowledgements.
-4. **Database + Object Storage** — long-term conversation history and media blobs. JetStream is not treated as the permanent chat database.
-
-## Architecture at a glance
-
-```text
-Clients (Mobile / Web / Desktop)
-              |
-         HTTPS/WebSocket
-              |
-     +--------v---------+
-     | Dext Chat Gateway|   x N instances
-     | Auth / ACL / RL  |
-     +--------+---------+
-              |
-              | Dext.Nats
-              v
-     +------------------+
-     |   NATS Cluster   |
-     | Core + JetStream |
-     +----+--------+----+
-          |        |
-          |        +------------------+
-          v                           v
-   Chat Workers                 Presence/Notify
-          |
-          v
-   Persistence Workers
-          |
-          v
-  PostgreSQL / other DB
-
-Media: Client -> S3/MinIO -> message contains metadata/reference only
-```
-
-## Core design decisions
-
-### 1. NATS is the real-time backbone, not the application database
-
-NATS provides routing, fan-out and service-to-service messaging. JetStream adds durable delivery where needed. Conversation history, search, reporting and long-term retention belong in a database designed for those workloads.
-
-### 2. Ephemeral events stay on Core NATS
-
-Presence and typing indicators are transient. Persisting every `typing...` or online heartbeat would create unnecessary storage and consumer pressure.
-
-Typical subjects:
+## Canonical message flow
 
 ```text
-presence.user.<user_id>
-typing.user.<user_id>
-typing.group.<group_id>
+Client
+  |
+  | HTTPS command (JWT)
+  v
+Dext Gateway
+  |
+  | authenticate + validate + authorize + rate limit
+  v
+Acceptance Service
+  |
+  | ONE PostgreSQL transaction
+  |  - allocate conversation sequence
+  |  - insert canonical message
+  |  - enforce (sender, client_message_id) idempotency
+  |  - insert outbox event
+  v
+PostgreSQL COMMIT
+  |
+  | response is now allowed to say "accepted"
+  v
+Outbox Dispatcher
+  |
+  v
+JetStream: message.accepted.v1
+  |
+  v
+Shared Pull Delivery Workers
+  |
+  v
+Core NATS user/group subjects
+  |
+  v
+Online Gateways / Clients
+
+Offline client -> Gateway Sync API -> PostgreSQL history + cursor
 ```
 
-### 3. Durable business events use JetStream
+The database is the authority for application identity and acceptance. JetStream `Nats-Msg-Id` is an additional transport deduplication safety net, not the permanent idempotency store. See [`Docs/ADR-002-transactional-acceptance-outbox.md`](Docs/ADR-002-transactional-acceptance-outbox.md).
 
-Examples include message accepted/created, delivery state changes, read receipts (when required by product semantics), group membership changes and offline-delivery workflows.
+## Why not one durable consumer per user?
 
-### 4. Do not create one durable JetStream consumer per user
+The system is designed so durable infrastructure cardinality follows bounded worker roles and partitions, not registered users/devices. Backend delivery instances share a durable pull consumer. Offline recovery uses the conversation log plus per-user cursors rather than hundreds of thousands of durable consumers.
 
-The architecture must remain efficient at very large user counts. Durable processing will use shared/partitioned streams and worker consumers rather than hundreds of thousands of long-lived durable consumers.
+## Storage responsibilities
 
-Partitioning should be deterministic by conversation or another stable routing key, for example:
+| Layer | Responsibility |
+|---|---|
+| Dext Gateway | authentication, API/WebSocket surface, validation, rate limits, backpressure |
+| Core NATS | transient online delivery, presence, typing, realtime notification fan-out |
+| JetStream | durable accepted-event delivery, retry/replay, DLQ pipeline |
+| PostgreSQL | canonical messages, idempotency, ordering, conversations, members, receipts, cursors, outbox |
+| S3/MinIO | image/audio/video/file bytes; NATS messages only carry references/metadata |
+
+## Gateway surface
+
+Representative authenticated routes:
 
 ```text
-partition = Hash(conversation_id) mod N
+POST /api/messenger/conversations/direct
+POST /api/messenger/conversations/group
+POST /api/messenger/conversations/list
+POST /api/messenger/groups/members
+POST /api/messenger/groups/members/remove
+POST /api/messenger/messages
+POST /api/messenger/sync
+POST /api/messenger/cursors/delivered
+POST /api/messenger/cursors/read
+POST /api/messenger/receipts
+POST /api/messenger/media/uploads
+POST /api/messenger/media/commit
+POST /api/messenger/media/resolve
+
+WS   /hubs/messenger
 ```
 
-This preserves a path toward per-conversation ordering while allowing horizontal scale.
-
-### 5. Client connections terminate at gateways
-
-Although NATS can expose WebSocket connectivity, the default architecture keeps clients behind Dext gateways. This gives us one controlled place for authentication, authorization, bans, device/session rules, rate limiting, payload validation, anti-abuse controls, metrics and protocol upgrades.
-
-### 6. Media is not transported as large NATS payloads
-
-Images, videos and voice files go to object storage such as S3/MinIO. Chat messages contain file identifiers, URLs/tokens and metadata.
-
-## Subject model (initial)
-
-The subject namespace is versioned from day one:
-
-```text
-msg.v1.user.<user_id>                 # online/direct fan-out
-msg.v1.group.<group_id>               # online group fan-out
-msg.v1.conv.<conversation_id>         # conversation event routing
-
-presence.v1.user.<user_id>
-typing.v1.user.<user_id>
-typing.v1.group.<group_id>
-
-receipt.v1.delivered.<conversation_id>
-receipt.v1.read.<conversation_id>
-
-event.v1.message.created
-event.v1.group.member_added
-event.v1.group.member_removed
-```
-
-Exact subject contracts are documented in [`Docs/PROTOCOL.md`](Docs/PROTOCOL.md).
+`sender_user_id`, device and session identity are derived from authenticated claims; they are not trusted from message bodies.
 
 ## Repository layout
 
 ```text
-Source/                 Core Delphi units
-Tests/                  Unit/integration tests
-Demo/                   Runnable examples
-Docs/
-  ARCHITECTURE.md       System architecture and scaling model
-  PROTOCOL.md           Subjects, envelopes and delivery semantics
-  ADR-001-architecture.md
-  ROADMAP.md
+Source/                 Core/domain/transport/gateway/client units
+Source/Persistence/     Dext Entity + PostgreSQL reference adapters
+Tests/                  Dext.Testing contract/unit test suite
+Demo/VCLClient/         VCL production/developer client
+Benchmarks/loadgen/     Distributed Go WebSocket/HTTP load generator
+Benchmarks/              Failure matrix and future measured results
+database/               Versioned PostgreSQL migrations
+deploy/                  Development NATS/PostgreSQL/MinIO topology
+scripts/                 Quality gate
+Docs/                    Architecture, protocol, ADRs, roadmap
 ```
 
-## Initial implementation phases
+## Development environment
 
-**Phase 0 — contracts and architecture**
-- architecture documentation
-- subject naming rules
-- message envelope and IDs
-- transport abstractions
-- failure/idempotency rules
+`deploy/docker-compose.dev.yml` starts a development-only three-node NATS/JetStream cluster, PostgreSQL and MinIO. The included credentials are explicitly for local development and must not be reused in production.
 
-**Phase 1 — Core NATS messaging**
-- personal message routing
-- group message routing
-- presence
-- typing
-- delivery callbacks
-- multi-device fan-out model
+Apply database migrations in numeric order. Production PostgreSQL should use connection pooling and HA appropriate to the deployment.
 
-**Phase 2 — JetStream durability**
-- stream topology
-- partition strategy
-- persistence worker
-- retry/backoff and DLQ policy
-- deduplication/idempotency
+## Tests and quality gate
 
-**Phase 3 — Dext gateway**
-- authentication/session model
-- WebSocket protocol
-- HTTP APIs for history/groups
-- rate limiting
-- observability
+The repository includes `Tests/Dext.Messenger.Tests.dpr` with contract tests for protocol primitives, transactional acceptance semantics, delivery envelopes, backpressure, media policy, connection registry, rate-limit isolation and conversation lifecycle.
 
-**Phase 4 — scale validation**
-- load generator
-- connection benchmarks
-- message fan-out benchmarks
-- failure/reconnect tests
-- capacity planning for 300k concurrent users
+On a machine with Delphi configured:
+
+```powershell
+$env:DELPHI_UNIT_PATH = '<Dext Sources>;<dext_nats Source>'
+./scripts/quality-gate.ps1
+./Tests/Dext.Messenger.Tests.exe
+```
+
+The GitHub workflow always builds/vets the Go load generator and runs structural checks. A self-hosted Windows/Delphi runner can enable the Delphi job through the `DELPHI_SELF_HOSTED` repository variable.
+
+## Scale validation
+
+`Benchmarks/loadgen` can generate WebSocket connection load and authenticated HTTP send load from multiple hosts. `Benchmarks/FAILURE_MATRIX.md` defines node loss, database outage, reconnect storm, slow consumer, poison event, worker crash and other reliability scenarios.
+
+A 300,000-connection target must be established by distributed measurement. Every published result must record hardware, topology, TLS mode, payload distribution, gateway count, NATS/JetStream layout, PostgreSQL layout, CPU/RAM/network/storage, p50/p95/p99 latency, failures, outbox backlog and consumer lag.
+
+## Important design rules
+
+- Do not place large media bytes in NATS messages.
+- Do not use JetStream as the permanent searchable chat database.
+- Do not create one durable consumer, thread or stream per user/conversation.
+- Do not trust sender identity supplied by a client payload.
+- Do not report an uncommitted message proposal as accepted.
+- Do not publish a 100k/300k capacity claim without reproducible benchmark evidence.
+
+## Documentation
+
+- [`Docs/ARCHITECTURE.md`](Docs/ARCHITECTURE.md)
+- [`Docs/PROTOCOL.md`](Docs/PROTOCOL.md)
+- [`Docs/ADR-001-architecture.md`](Docs/ADR-001-architecture.md)
+- [`Docs/ADR-002-transactional-acceptance-outbox.md`](Docs/ADR-002-transactional-acceptance-outbox.md)
+- [`Docs/ROADMAP.md`](Docs/ROADMAP.md)
+- [`Benchmarks/FAILURE_MATRIX.md`](Benchmarks/FAILURE_MATRIX.md)
 
 ## Dependency
 
-The NATS transport layer is based on [`usofm/dext_nats`](https://github.com/usofm/dext_nats), which already provides a native Dext NATS client including publish/subscribe, request/reply, reconnect handling, TLS/authentication and JetStream-related APIs.
-
-## Non-goals for the first release
-
-- storing large media blobs inside NATS
-- treating JetStream as the permanent searchable message database
-- one dedicated server thread per user or conversation
-- one durable JetStream consumer per registered user
-- binding business logic directly to a specific UI framework
+The native NATS transport is provided by `usofm/dext_nats`. Dext provides the web/Hubs/authentication/DI/Entity infrastructure.
 
 ## License
 
-License will follow the repository owner's chosen policy. Until a license file is committed, do not assume redistribution terms beyond GitHub's repository visibility.
+Until a license file is committed, do not assume redistribution terms beyond GitHub repository visibility.
